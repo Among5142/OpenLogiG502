@@ -27,8 +27,9 @@ use openlogi_device::inventory::{Enumerator, InventoryError};
 use openlogi_device::pairing::PairingReceiver;
 use openlogi_device::write::{
     self as device, Dpi, DpiInfo, FeatureEntry, FirmwareEntity, HapticWaveform, LightingMethod,
-    LitraModel, OnboardBindingChange, OnboardProfilesDump, OnboardSectorWrite, OnboardWriteError,
-    PointerScaling, ReprogControlEntry, ScrollResolution, ScrollWheelMode,
+    LitraModel, OnboardAction, OnboardBindingChange, OnboardButtons, OnboardProfilesDump,
+    OnboardSectorWrite, OnboardWriteError, PointerScaling, ReprogControlEntry, ScrollResolution,
+    ScrollWheelMode,
 };
 use openlogi_device::{DeviceIoGate, DeviceIoSignal, DeviceRoute};
 
@@ -262,6 +263,28 @@ pub async fn dump_reprog_controls(
 /// Read the `0x8100` onboard profile store of the device `route` reaches.
 pub async fn dump_onboard_profiles(route: &DeviceRoute) -> Result<OnboardProfilesDump, WriteError> {
     device::dump_onboard_profiles(&*native_backend(), route).await
+}
+
+/// Read the active onboard profile's buttons of the mouse `route` reaches.
+pub async fn get_onboard_buttons(route: &DeviceRoute) -> Result<OnboardButtons, WriteError> {
+    device::get_onboard_buttons(&*native_backend(), route).await
+}
+
+/// Bind one button of the active onboard profile of the mouse `route`
+/// reaches, storing Command as this computer's primary modifier.
+pub async fn set_onboard_button(
+    route: &DeviceRoute,
+    button: u8,
+    action: OnboardAction,
+) -> Result<OnboardButtons, WriteError> {
+    device::set_onboard_button(
+        &*native_backend(),
+        route,
+        button,
+        action,
+        openlogi_core::binding::CommandModifier::for_this_host(),
+    )
+    .await
 }
 
 /// Change bindings in the active onboard profile of the mouse `route` reaches.

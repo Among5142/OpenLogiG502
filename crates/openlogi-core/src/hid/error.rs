@@ -208,6 +208,28 @@ pub enum WriteError {
         /// The name the device reports afterwards, if any.
         actual: Option<String>,
     },
+    /// The mouse's active onboard profile cannot be edited: its profile store
+    /// uses a layout OpenLogi does not decode, the mouse is running a factory
+    /// profile, or the active profile fails its checksum.
+    ///
+    /// Nothing was written.
+    #[error("the mouse's active onboard profile cannot be edited")]
+    OnboardProfileNotWritable,
+    /// A binding for a button the mouse's onboard profile does not have.
+    ///
+    /// Nothing was written.
+    #[error("the mouse has no onboard button {}", u16::from(*button) + 1)]
+    OnboardButtonUnsupported {
+        /// The zero-based button asked for.
+        button: u8,
+    },
+    /// The mouse acknowledged an onboard-profile write but reads back
+    /// something else.
+    #[error("the mouse did not keep the new binding for button {}", u16::from(*button) + 1)]
+    OnboardBindingNotApplied {
+        /// The zero-based button written.
+        button: u8,
+    },
 }
 
 /// HID++ operation being performed when a device write/read failed.
@@ -270,6 +292,12 @@ pub enum HidppOperation {
     /// Write an Easy-Switch slot's `0x1815` host name. Appended last —
     /// variant order is wire format.
     RenameHost,
+    /// Read the active `0x8100` onboard profile's button bindings. Appended
+    /// last — variant order is wire format.
+    ReadOnboardButtons,
+    /// Write one button binding of the active `0x8100` onboard profile.
+    /// Appended last — variant order is wire format.
+    WriteOnboardButton,
 }
 
 /// HID++ feature error kind in a serializable wire-safe form.

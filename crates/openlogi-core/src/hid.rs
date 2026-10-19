@@ -14,6 +14,7 @@ pub mod easy_switch;
 pub mod error;
 pub mod fn_lock;
 pub mod light;
+pub mod onboard_buttons;
 pub mod pairing;
 pub mod report_rate;
 pub mod route;
@@ -28,6 +29,10 @@ pub use easy_switch::{EasySwitchHosts, EasySwitchSlot, HostConnection, HostOsInf
 pub use error::{HidppFeatureErrorKind, HidppOperation, WriteError};
 pub use fn_lock::FnLockState;
 pub use light::{LightCommand, commands_for_light_settings};
+pub use onboard_buttons::{
+    OnboardAction, OnboardBinding, OnboardButton, OnboardButtons, OnboardFunction,
+    OnboardMouseButton,
+};
 pub use pairing::{Click, PairingError, PasskeyMethod, ReceiverSelector};
 pub use report_rate::{ReportRate, ReportRateInfo};
 pub use route::{

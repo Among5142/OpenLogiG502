@@ -37,7 +37,9 @@ pub use control::{Cid, KNOWN_CONTROLS, KnownControl, UNKNOWN_CONTROL_TRANSLATION
 pub use defaults::{default_binding, default_binding_for, default_gesture_binding};
 pub use effect::{Effect, MediaKey, MouseButton, NativeAction, Script, Shortcut};
 pub use gesture::GestureDirection;
-pub use key_combo::{KeyCombo, KeyComboParseError, KeyboardUsage, KeyboardUsageError};
+pub use key_combo::{
+    CommandModifier, KeyCombo, KeyComboParseError, KeyboardUsage, KeyboardUsageError,
+};
 pub use swipe::{
     GESTURE_HOLD_FOR_SWIPE, GESTURE_REARM_PAUSE, GESTURE_REPEAT_DISTANCE, GESTURE_SWIPE_DEADZONE,
     GESTURE_SWIPE_THRESHOLD, SwipeAccumulator, detect_swipe,

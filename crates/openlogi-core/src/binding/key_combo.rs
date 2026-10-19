@@ -265,6 +265,94 @@ impl KeyCombo {
     pub fn rendered_key(&self) -> String {
         self.key.label()
     }
+
+    /// The USB HID keyboard modifier byte for this chord, for storage that
+    /// keeps a raw HID report, such as a G-series mouse's onboard profile.
+    ///
+    /// Such storage is replayed by the device on whatever computer it is
+    /// plugged into, so the cross-platform Command modifier must be resolved
+    /// now: `command` says which key it stands for on the computer writing
+    /// it. Only left-hand modifier bits are produced.
+    #[must_use]
+    pub const fn hid_modifiers(&self, command: CommandModifier) -> u8 {
+        let mut bits = 0;
+        if self.has_command() {
+            bits |= match command {
+                CommandModifier::Gui => HID_LEFT_GUI,
+                CommandModifier::Control => HID_LEFT_CTRL,
+            };
+        }
+        if self.has_control() {
+            bits |= HID_LEFT_CTRL;
+        }
+        if self.has_shift() {
+            bits |= HID_LEFT_SHIFT;
+        }
+        if self.has_option() {
+            bits |= HID_LEFT_ALT;
+        }
+        if self.has_super() {
+            bits |= HID_LEFT_GUI;
+        }
+        bits
+    }
+
+    /// The chord a raw USB HID modifier byte and keyboard usage describe, the
+    /// inverse of [`Self::hid_modifiers`]. A stored chord names physical
+    /// keys, so it reads back as Control or Super, never as Command;
+    /// right-hand modifiers read as their left-hand key. `None` when `usage`
+    /// is not a key custom shortcuts support.
+    #[must_use]
+    pub fn from_hid(modifiers: u8, usage: u8) -> Option<Self> {
+        let key = KeyboardUsage::try_new(usage).ok()?;
+        let either = |left: u8| modifiers & (left | (left << 4)) != 0;
+        let mut bits = 0;
+        if either(HID_LEFT_CTRL) {
+            bits |= MOD_CONTROL;
+        }
+        if either(HID_LEFT_SHIFT) {
+            bits |= MOD_SHIFT;
+        }
+        if either(HID_LEFT_ALT) {
+            bits |= MOD_OPTION;
+        }
+        if either(HID_LEFT_GUI) {
+            bits |= MOD_SUPER;
+        }
+        Some(Self {
+            modifiers: bits,
+            key,
+        })
+    }
+}
+
+/// HID modifier-byte bits (USB HID Usage Tables, keyboard page `0xE0`–`0xE7`);
+/// the right-hand keys are each left-hand bit shifted up by four.
+const HID_LEFT_CTRL: u8 = 1 << 0;
+const HID_LEFT_SHIFT: u8 = 1 << 1;
+const HID_LEFT_ALT: u8 = 1 << 2;
+const HID_LEFT_GUI: u8 = 1 << 3;
+
+/// What the cross-platform Command modifier stands for on the computer that
+/// stores a chord as raw HID (see [`KeyCombo::hid_modifiers`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandModifier {
+    /// The logo key: Command on macOS.
+    Gui,
+    /// Control, as on Linux and Windows.
+    Control,
+}
+
+impl CommandModifier {
+    /// What Command stands for on the computer this code runs on.
+    #[must_use]
+    pub const fn for_this_host() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Gui
+        } else {
+            Self::Control
+        }
+    }
 }
 
 /// Why a user-entered keyboard shortcut could not be parsed.
@@ -439,6 +527,34 @@ mod tests {
         assert!(combo.has_option());
         assert_eq!(combo.key().code(), 0x50);
         assert_eq!(combo.rendered_label(), "Ctrl+Alt+Left");
+    }
+
+    #[test]
+    fn command_resolves_per_host_when_stored_as_hid() {
+        let combo = "Cmd+Shift+C".parse::<KeyCombo>().expect("valid shortcut");
+        assert_eq!(combo.hid_modifiers(CommandModifier::Control), 0x03);
+        assert_eq!(combo.hid_modifiers(CommandModifier::Gui), 0x0a);
+        let literal = "Ctrl+Alt+Super+Delete"
+            .parse::<KeyCombo>()
+            .expect("valid shortcut");
+        assert_eq!(literal.hid_modifiers(CommandModifier::Gui), 0x0d);
+    }
+
+    #[test]
+    fn a_stored_hid_chord_reads_back_as_physical_keys() {
+        let combo = KeyCombo::from_hid(0x03, 0x06).expect("valid chord");
+        assert_eq!(combo.rendered_label(), "Ctrl+Shift+C");
+        assert!(!combo.has_command());
+        // Right Ctrl and right GUI read as their left-hand keys.
+        let right = KeyCombo::from_hid(0x90, 0x04).expect("valid chord");
+        assert!(right.has_control() && right.has_super());
+        assert_eq!(
+            right.hid_modifiers(CommandModifier::Control),
+            0x09,
+            "round-trips to left-hand bits"
+        );
+        assert_eq!(KeyCombo::from_hid(0, 0x00), None);
+        assert_eq!(KeyCombo::from_hid(0, 0xe9), None);
     }
 
     #[test]

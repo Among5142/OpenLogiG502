@@ -119,7 +119,8 @@ pub enum OnboardWriteError {
 async fn writable_active_sector(
     feature: &OnboardProfilesFeature,
 ) -> Result<(OnboardProfilesInfo, u16), OnboardWriteError> {
-    let fail = |e: Hidpp20Error| classify_hidpp_error(e, HidppOperation::DumpFeatures, FEATURE);
+    let fail =
+        |e: Hidpp20Error| classify_hidpp_error(e, HidppOperation::WriteOnboardButton, FEATURE);
     let info = feature.get_info().await.map_err(fail)?;
     if !info.layout_supported() {
         return Err(OnboardWriteError::UnsupportedLayout {
@@ -165,7 +166,8 @@ async fn write_verified(
             before,
         });
     }
-    let fail = |e: Hidpp20Error| classify_hidpp_error(e, HidppOperation::DumpFeatures, FEATURE);
+    let fail =
+        |e: Hidpp20Error| classify_hidpp_error(e, HidppOperation::WriteOnboardButton, FEATURE);
     feature.write_sector(sector, &data).await.map_err(fail)?;
     let after = feature
         .read_sector(sector, sector_size)
@@ -217,7 +219,8 @@ async fn remap_on(
             button_count: info.button_count,
         });
     }
-    let fail = |e: Hidpp20Error| classify_hidpp_error(e, HidppOperation::DumpFeatures, FEATURE);
+    let fail =
+        |e: Hidpp20Error| classify_hidpp_error(e, HidppOperation::WriteOnboardButton, FEATURE);
     let before = feature
         .read_sector(sector, info.sector_size)
         .await
@@ -266,13 +269,20 @@ async fn restore_on(
             expected: info.sector_size,
         });
     }
-    let fail = |e: Hidpp20Error| classify_hidpp_error(e, HidppOperation::DumpFeatures, FEATURE);
+    let fail =
+        |e: Hidpp20Error| classify_hidpp_error(e, HidppOperation::WriteOnboardButton, FEATURE);
     let before = feature
         .read_sector(sector, info.sector_size)
         .await
         .map_err(fail)?;
     write_verified(feature, sector, before, backup, info.sector_size).await
 }
+
+mod buttons;
+
+pub use buttons::{
+    get_onboard_buttons, get_onboard_buttons_on, set_onboard_button, set_onboard_button_on,
+};
 
 #[cfg(test)]
 mod tests;

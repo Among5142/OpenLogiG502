@@ -66,11 +66,16 @@ pub use litra::{
     read_state as read_litra_state, watch as watch_litra,
 };
 pub use onboard_profiles::{
-    OnboardBindingChange, OnboardSectorWrite, OnboardWriteError, remap_onboard_buttons,
-    restore_onboard_profile,
+    OnboardBindingChange, OnboardSectorWrite, OnboardWriteError, get_onboard_buttons,
+    get_onboard_buttons_on, remap_onboard_buttons, restore_onboard_profile, set_onboard_button,
+    set_onboard_button_on,
 };
 pub use openlogi_core::hid::{
     EasySwitchHosts, EasySwitchSlot, HostConnection, HostOsInfo, HostOsKind,
+};
+pub use openlogi_core::hid::{
+    OnboardAction, OnboardBinding, OnboardButton, OnboardButtons, OnboardFunction,
+    OnboardMouseButton,
 };
 pub use openlogi_core::hid::{ReportRate, ReportRateInfo};
 pub use os_layout::{HostOs, OsLayoutOutcome, OsVersion, keep_os_layout_on};
