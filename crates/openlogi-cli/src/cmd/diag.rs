@@ -18,6 +18,7 @@ pub mod features;
 pub mod lighting;
 pub mod pointer_speed;
 pub mod profiles;
+pub mod remap;
 pub mod smartshift;
 pub mod wheel;
 
@@ -41,6 +42,11 @@ pub enum DiagCmd {
     PointerSpeed(pointer_speed::PointerSpeedArgs),
     /// Dump a G-series mouse's HID++ 0x8100 onboard profiles (read-only).
     Profiles(profiles::ProfilesArgs),
+    /// Change one binding in a G-series mouse's active 0x8100 onboard
+    /// profile. Writes device flash; saves a backup file first.
+    Remap(remap::RemapArgs),
+    /// Write a `diag remap` backup back over the active onboard profile.
+    Restore(remap::RestoreArgs),
 }
 
 impl DiagCmd {
@@ -58,6 +64,8 @@ impl DiagCmd {
             Self::Wheel(args) => wheel::run(args).await,
             Self::PointerSpeed(args) => pointer_speed::run(args).await,
             Self::Profiles(args) => profiles::run(args).await,
+            Self::Remap(args) => remap::run_remap(args).await,
+            Self::Restore(args) => remap::run_restore(args).await,
         }
     }
 }

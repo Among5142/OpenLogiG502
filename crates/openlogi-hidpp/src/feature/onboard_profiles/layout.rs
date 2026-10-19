@@ -397,6 +397,118 @@ impl ProfileSector {
     }
 }
 
+/// Why a binding could not be encoded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum EncodeError {
+    /// A macro sector must fit the 12 bits the binding has for it.
+    #[error("macro sector 0x{0:04x} does not fit in 12 bits")]
+    MacroSectorTooLarge(u16),
+}
+
+impl ButtonBinding {
+    /// Encodes the binding as its 4 on-flash bytes; the inverse of
+    /// [`Self::decode`].
+    ///
+    /// Firmware functions are written `90 fn 00 data`, as G HUB writes them
+    /// on a G502 X LIGHTSPEED (Solaar writes `ff` in the third byte; libratbag
+    /// calls it reserved). A HID binding that sends nothing is written
+    /// `80 00 ff ff`, as Solaar writes it.
+    pub fn encode(self) -> Result<[u8; BINDING_LEN], EncodeError> {
+        Ok(match self {
+            Self::Unassigned => [0xff; BINDING_LEN],
+            Self::NoAction => [TYPE_SEND, 0x00, 0xff, 0xff],
+            Self::Mouse(buttons) => {
+                let [hi, lo] = buttons.bits().to_be_bytes();
+                [TYPE_SEND, 0x01, hi, lo]
+            }
+            Self::Key { modifiers, usage } => [TYPE_SEND, 0x02, modifiers.bits(), usage],
+            Self::Consumer(usage) => {
+                let [hi, lo] = usage.to_be_bytes();
+                [TYPE_SEND, 0x03, hi, lo]
+            }
+            Self::Function { function, data } => [TYPE_FUNCTION, function as u8, 0x00, data],
+            Self::Macro {
+                behavior,
+                sector,
+                address,
+            } => {
+                if sector > 0x0fff {
+                    return Err(EncodeError::MacroSectorTooLarge(sector));
+                }
+                let [sector_hi, sector_lo] = sector.to_be_bytes();
+                let [address_hi, address_lo] = address.to_be_bytes();
+                [
+                    ((behavior as u8) << 4) | sector_hi,
+                    sector_lo,
+                    address_hi,
+                    address_lo,
+                ]
+            }
+        })
+    }
+}
+
+/// Which binding table of a profile a slot lives in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum BindingLayer {
+    /// The normal bindings.
+    Primary,
+    /// The bindings used while the G-shift button is held.
+    GShift,
+}
+
+/// Replaces one binding in a raw profile sector, leaving every other byte
+/// untouched. `slot` is zero-based. The sector's CRC is stale afterwards;
+/// call [`seal`] once all edits are done.
+pub fn set_binding(
+    sector: &mut [u8],
+    layer: BindingLayer,
+    slot: usize,
+    binding: ButtonBinding,
+) -> Result<(), BindingEditError> {
+    if slot >= BINDING_SLOTS {
+        return Err(BindingEditError::NoSuchSlot(slot));
+    }
+    if sector.len() < MIN_PROFILE_SECTOR_LEN {
+        return Err(BindingEditError::Layout(LayoutError::TooShort {
+            needed: MIN_PROFILE_SECTOR_LEN,
+            actual: sector.len(),
+        }));
+    }
+    let base = match layer {
+        BindingLayer::Primary => offset::BUTTONS,
+        BindingLayer::GShift => offset::GSHIFT_BUTTONS,
+    };
+    let start = base + slot * BINDING_LEN;
+    sector[start..start + BINDING_LEN].copy_from_slice(&binding.encode()?);
+    Ok(())
+}
+
+/// Why [`set_binding`] refused an edit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum BindingEditError {
+    /// Profiles have [`BINDING_SLOTS`] slots per layer.
+    #[error("slot {0} is past the {BINDING_SLOTS} binding slots")]
+    NoSuchSlot(usize),
+    /// The binding cannot be encoded.
+    #[error(transparent)]
+    Encode(#[from] EncodeError),
+    /// The sector is too short to be a profile.
+    #[error(transparent)]
+    Layout(#[from] LayoutError),
+}
+
+/// Rewrites a full sector's trailing big-endian CRC to match its contents.
+/// A sector shorter than the CRC is left untouched.
+pub fn seal(sector: &mut [u8]) {
+    let Some(body_len) = sector.len().checked_sub(2) else {
+        return;
+    };
+    let crc = crc_ccitt(&sector[..body_len]);
+    sector[body_len..].copy_from_slice(&crc.to_be_bytes());
+}
+
 /// UTF-16LE, NUL-padded; an all-`0xff` field is the erased default.
 fn decode_name(raw: &[u8]) -> Option<String> {
     if raw.iter().all(|&b| b == 0xff) {
@@ -420,7 +532,7 @@ mod tests {
         assert_eq!(crc_ccitt(b"123456789"), 0x29b1);
     }
 
-    fn seal(mut sector: Vec<u8>) -> Vec<u8> {
+    fn sealed(mut sector: Vec<u8>) -> Vec<u8> {
         let len = sector.len();
         let crc = crc_ccitt(&sector[..len - 2]);
         sector[len - 2..].copy_from_slice(&crc.to_be_bytes());
@@ -429,7 +541,7 @@ mod tests {
 
     #[test]
     fn a_sealed_sector_validates_and_a_flipped_byte_does_not() {
-        let mut sector = seal(vec![0xff; 255]);
+        let mut sector = sealed(vec![0xff; 255]);
         assert!(sector_crc_valid(&sector));
         sector[10] ^= 1;
         assert!(!sector_crc_valid(&sector));
@@ -444,7 +556,7 @@ mod tests {
             0x00, 0x02, 0x00, 0x00, //
             0xff, 0xff, 0x00, 0x00,
         ]);
-        let entries = decode_directory(&seal(sector)).unwrap();
+        let entries = decode_directory(&sealed(sector)).unwrap();
         assert_eq!(
             entries,
             [
@@ -549,7 +661,7 @@ mod tests {
             .flat_map(u16::to_le_bytes)
             .collect();
         sector[0xa0..0xd0].copy_from_slice(&name);
-        seal(sector)
+        sealed(sector)
     }
 
     #[test]
@@ -646,6 +758,75 @@ mod tests {
         assert_eq!(
             profile.gshift_buttons[11],
             Ok(ButtonBinding::Consumer(0x00ea))
+        );
+    }
+
+    #[test]
+    fn every_decoded_binding_encodes_back_to_its_bytes() {
+        let sector = hex(G502X_PROFILE_2);
+        for slot in sector[0x20..0xa0].chunks_exact(4) {
+            let raw: [u8; 4] = slot.try_into().unwrap();
+            let binding = ButtonBinding::decode(raw).unwrap();
+            assert_eq!(binding.encode().unwrap(), raw, "{binding:?}");
+        }
+        let macro_raw = [0x00, 0x06, 0x00, 0x26];
+        let decoded = ButtonBinding::decode(macro_raw).unwrap();
+        assert_eq!(decoded.encode().unwrap(), macro_raw);
+    }
+
+    #[test]
+    fn an_oversized_macro_sector_does_not_encode() {
+        let binding = ButtonBinding::Macro {
+            behavior: MacroBehavior::Execute,
+            sector: 0x1000,
+            address: 0,
+        };
+        assert_eq!(
+            binding.encode(),
+            Err(EncodeError::MacroSectorTooLarge(0x1000))
+        );
+    }
+
+    #[test]
+    fn set_binding_changes_only_its_slot_and_seal_restores_the_crc() {
+        let original = hex(G502X_PROFILE_2);
+        let mut sector = original.clone();
+        // G8 (slot 10) from NextDpi to the keyboard "A" key.
+        let binding = ButtonBinding::Key {
+            modifiers: KeyModifiers::empty(),
+            usage: 0x04,
+        };
+        set_binding(&mut sector, BindingLayer::Primary, 9, binding).unwrap();
+        assert!(!sector_crc_valid(&sector));
+        seal(&mut sector);
+        assert!(sector_crc_valid(&sector));
+
+        let changed: Vec<usize> = (0..sector.len())
+            .filter(|&i| sector[i] != original[i])
+            .collect();
+        // Only the slot's bytes and the two CRC bytes moved.
+        assert!(
+            changed
+                .iter()
+                .all(|&i| (0x44..0x48).contains(&i) || i >= 253),
+            "{changed:x?}"
+        );
+        assert_eq!(
+            ProfileSector::decode(&sector).unwrap().buttons[9],
+            Ok(binding)
+        );
+
+        set_binding(
+            &mut sector,
+            BindingLayer::GShift,
+            4,
+            ButtonBinding::Mouse(MouseButtons::MIDDLE),
+        )
+        .unwrap();
+        assert_eq!(&sector[0x70..0x74], &[0x80, 0x01, 0x00, 0x04]);
+        assert_eq!(
+            set_binding(&mut sector, BindingLayer::Primary, 16, binding),
+            Err(BindingEditError::NoSuchSlot(16))
         );
     }
 

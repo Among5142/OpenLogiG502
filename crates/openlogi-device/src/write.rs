@@ -25,6 +25,7 @@ mod haptic;
 mod hires_wheel;
 mod lighting;
 mod litra;
+mod onboard_profiles;
 mod os_layout;
 mod pointer_scaling;
 mod report_rate;
@@ -63,6 +64,10 @@ pub use litra::{
     LightWatch, LitraDescriptor, LitraModel, apply as apply_litra,
     encode_command as encode_litra_command, find_litra, litra_model_for_route, matches_litra,
     read_state as read_litra_state, watch as watch_litra,
+};
+pub use onboard_profiles::{
+    OnboardBindingChange, OnboardSectorWrite, OnboardWriteError, remap_onboard_buttons,
+    restore_onboard_profile,
 };
 pub use openlogi_core::hid::{
     EasySwitchHosts, EasySwitchSlot, HostConnection, HostOsInfo, HostOsKind,

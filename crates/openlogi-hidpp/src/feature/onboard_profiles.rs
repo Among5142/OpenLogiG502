@@ -9,7 +9,9 @@
 //! `OnboardProfiles`); Logitech's public spec drop does not cover `0x8100`.
 //! The sector layout lives in [`layout`].
 //!
-//! Only reads are implemented. Writing a sector rewrites device flash.
+//! [`OnboardProfilesFeature::write_sector`] rewrites device flash; callers
+//! own reading the sector first, keeping a backup, and verifying by reading
+//! it back.
 
 use num_enum::TryFromPrimitive;
 use openlogi_hidpp_derive::Feature;
@@ -29,6 +31,13 @@ const FN_GET_ONBOARD_MODE: u8 = 0x2;
 const FN_GET_CURRENT_PROFILE: u8 = 0x4;
 /// `memoryRead` function id.
 const FN_MEMORY_READ: u8 = 0x5;
+/// `memoryAddrWrite` function id: opens a write of `length` bytes at
+/// `sector`/`offset`.
+const FN_MEMORY_ADDR_WRITE: u8 = 0x6;
+/// `memoryWrite` function id: one 16-byte chunk of an open write.
+const FN_MEMORY_WRITE: u8 = 0x7;
+/// `memoryWriteEnd` function id: commits the open write.
+const FN_MEMORY_WRITE_END: u8 = 0x8;
 
 /// The memory model both references support (libratbag
 /// `HIDPP20_ONBOARD_PROFILES_MEMORY_TYPE_G402`).
@@ -221,6 +230,34 @@ impl OnboardProfilesFeature {
         }
         Ok(data)
     }
+
+    /// Replaces the whole of `sector` with `data` in device flash.
+    ///
+    /// Sends `memoryAddrWrite(sector, 0, data.len())`, then `data` in 16-byte
+    /// `memoryWrite` chunks (the last zero-padded; the declared length tells
+    /// the firmware where the sector ends), then `memoryWriteEnd` — the
+    /// sequence libratbag and Solaar both use. The caller supplies the full
+    /// sector with its CRC already sealed (see [`layout::seal`]).
+    ///
+    /// Empty data, or data longer than a `u16` length, fails with
+    /// [`Hidpp20Error::UnsupportedResponse`] before anything is sent.
+    pub async fn write_sector(&self, sector: u16, data: &[u8]) -> Result<(), Hidpp20Error> {
+        let length = u16::try_from(data.len())
+            .ok()
+            .filter(|&len| len > 0)
+            .ok_or(Hidpp20Error::UnsupportedResponse)?;
+        let mut open = [0; 16];
+        open[..2].copy_from_slice(&sector.to_be_bytes());
+        open[4..6].copy_from_slice(&length.to_be_bytes());
+        self.endpoint.call_long(FN_MEMORY_ADDR_WRITE, open).await?;
+        for chunk in data.chunks(usize::from(MEMORY_READ_CHUNK)) {
+            let mut args = [0; 16];
+            args[..chunk.len()].copy_from_slice(chunk);
+            self.endpoint.call_long(FN_MEMORY_WRITE, args).await?;
+        }
+        self.endpoint.call(FN_MEMORY_WRITE_END, [0; 3]).await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -339,6 +376,71 @@ mod tests {
             let sector = pending.await.unwrap();
             let expected: Vec<u8> = (0..40).collect();
             assert_eq!(sector, expected);
+        });
+    }
+
+    /// Answers every request the feature writes with its own header, until
+    /// `expected` requests have gone out, and returns them.
+    async fn answer_all(
+        handle: &MockRawHidHandle,
+        pending: &mut std::pin::Pin<Box<impl std::future::Future>>,
+        expected: usize,
+    ) -> Vec<Vec<u8>> {
+        for sent in 0..expected {
+            for _ in 0..50 {
+                assert!(futures::poll!(pending.as_mut()).is_pending());
+                if handle.written_reports().len() > sent {
+                    break;
+                }
+                futures_timer::Delay::new(std::time::Duration::from_millis(2)).await;
+            }
+            let request = handle.written_reports()[sent].clone();
+            let reply = MessageHeader {
+                function_id: U4::from_lo(request[3] >> 4),
+                software_id: U4::from_lo(request[3] & 0x0f),
+                ..header(0)
+            };
+            handle
+                .send_incoming(Message::Long(reply, [0; 16]).into())
+                .await;
+        }
+        handle.written_reports()
+    }
+
+    #[test]
+    fn write_sector_opens_streams_and_commits() {
+        futures::executor::block_on(async {
+            let (feature, handle) = feature().await;
+            let data: Vec<u8> = (0..=254).collect();
+            let mut pending = Box::pin(feature.write_sector(0x0001, &data));
+            // 1 open + 16 chunks (the 16th holds one byte) + 1 commit.
+            let written = answer_all(&handle, &mut pending, 18).await;
+            pending.await.unwrap();
+            assert_eq!(written.len(), 18);
+
+            // report id, device, feature, fn<<4|sw, then the payload.
+            assert_eq!(written[0][3] >> 4, 6);
+            assert_eq!(&written[0][4..10], &[0x00, 0x01, 0x00, 0x00, 0x00, 0xff]);
+            for (i, chunk) in written[1..17].iter().enumerate() {
+                assert_eq!(chunk[3] >> 4, 7);
+                let start = i * 16;
+                let end = (start + 16).min(255);
+                assert_eq!(&chunk[4..4 + (end - start)], &data[start..end]);
+            }
+            assert_eq!(written[16][19], 0, "the last chunk's 16th byte is padding");
+            assert_eq!(written[17][3] >> 4, 8);
+        });
+    }
+
+    #[test]
+    fn an_empty_write_is_refused_unsent() {
+        futures::executor::block_on(async {
+            let (feature, handle) = feature().await;
+            assert_matches!(
+                feature.write_sector(1, &[]).await,
+                Err(Hidpp20Error::UnsupportedResponse)
+            );
+            assert!(handle.written_reports().is_empty());
         });
     }
 

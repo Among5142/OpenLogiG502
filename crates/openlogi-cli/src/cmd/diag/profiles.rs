@@ -152,7 +152,7 @@ fn crc_label(valid: bool) -> &'static str {
     if valid { "ok" } else { "MISMATCH" }
 }
 
-fn binding_label(binding: Result<ButtonBinding, UnknownBinding>) -> String {
+pub(crate) fn binding_label(binding: Result<ButtonBinding, UnknownBinding>) -> String {
     match binding {
         Ok(ButtonBinding::Unassigned) => "unassigned".to_owned(),
         Ok(ButtonBinding::NoAction) => "no action".to_owned(),
