@@ -41,8 +41,8 @@
 use std::time::{Duration, Instant};
 
 use openlogi_core::hid::{
-    BacklightState, DeviceRoute, EasySwitchHosts, FnLockState, LightCommand, ReportRateInfo,
-    WriteError,
+    BacklightState, DeviceRoute, EasySwitchHosts, FnLockState, LightCommand, OnboardButtons,
+    ReportRateInfo, WriteError,
 };
 use openlogi_ipc::SavedConfig;
 use openlogi_ipc::client::{self, ConnectError};
@@ -67,9 +67,10 @@ use request::LinkLost;
 pub use request::PollEventMonitor;
 pub use request::{
     CancelPairing, Command, LoadConfig, PairDevice, ReadBacklight, ReadDpi, ReadEasySwitchHosts,
-    ReadFnLock, ReadReportRate, ReadSmartShift, ReloadConfig, RenameEasySwitchHost,
-    RequestAccessibilityPrompt, SetBacklight, SetDpi, SetFnLock, SetLight, SetLightManualPower,
-    SetLighting, SetReportRate, SetSmartShift, StartPairing, UnpairDevice,
+    ReadFnLock, ReadOnboardButtons, ReadReportRate, ReadSmartShift, ReloadConfig,
+    RenameEasySwitchHost, RequestAccessibilityPrompt, SetBacklight, SetDpi, SetFnLock, SetLight,
+    SetLightManualPower, SetLighting, SetOnboardButton, SetReportRate, SetSmartShift, StartPairing,
+    UnpairDevice,
 };
 
 /// How long to wait before retrying a connect that failed. This is a retry
@@ -150,6 +151,20 @@ pub enum GuiUpdate {
         write: u64,
         /// The read-back, or why the rename did not land.
         result: Result<EasySwitchHosts, WriteError>,
+    },
+    /// What a G-series mouse reports after an onboard-button write the GUI
+    /// asked for: the buttons it reads back, or the typed refusal. Answers
+    /// [`SetOnboardButton`].
+    OnboardButtonWritten {
+        /// The mouse that was written.
+        key: DeviceKey,
+        /// The connection the write went out on; an answer is stale once the
+        /// mouse moves, like [`Self::ReportRateWritten`]'s.
+        route: DeviceRoute,
+        /// Which write this answers: [`SetOnboardButton::write`].
+        write: u64,
+        /// The read-back, or why the write did not land.
+        result: Result<OnboardButtons, WriteError>,
     },
     /// A pairing command could not be delivered, so no session will ever appear
     /// in the observed state to explain the silence. Reported locally rather

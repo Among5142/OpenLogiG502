@@ -1,5 +1,5 @@
 //! SWR-backed device-setting reads (DPI, SmartShift, Fn lock, report rate,
-//! backlight, Easy-Switch hosts) keyed by device identity.
+//! backlight, Easy-Switch hosts, onboard buttons) keyed by device identity.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -8,7 +8,7 @@ use std::time::Duration;
 use gpui::{Context, Subscription};
 use openlogi_core::hid::{
     BacklightChange, BacklightState, DeviceRoute, DpiInfo, EasySwitchHosts, FnLockState,
-    ReportRateInfo, SmartShiftStatus, WriteError,
+    OnboardAction, OnboardBinding, OnboardButtons, ReportRateInfo, SmartShiftStatus, WriteError,
 };
 use swr_core::{
     MaybeSend, MaybeSync, QueryHandle, QueryOptions, QueryState, Retry, RetryPolicy, Runtime,
@@ -18,12 +18,12 @@ use swr_gpui::Query;
 use tokio::sync::mpsc;
 
 use super::ipc::{
-    Command, ReadBacklight, ReadDpi, ReadEasySwitchHosts, ReadFnLock, ReadReportRate,
-    ReadSmartShift,
+    Command, ReadBacklight, ReadDpi, ReadEasySwitchHosts, ReadFnLock, ReadOnboardButtons,
+    ReadReportRate, ReadSmartShift,
 };
 use crate::state::{
     AppState, BacklightLoad, DeviceKey, DpiLoad, EasySwitchLoad, FnLockLoad, HostRenameRefusal,
-    Load, ReportRateLoad, SmartShiftLoad, StateEvent,
+    Load, OnboardButtonRefusal, OnboardButtonsLoad, ReportRateLoad, SmartShiftLoad, StateEvent,
 };
 
 const ROOT: &str = "device-read";
@@ -33,6 +33,7 @@ const FN_LOCK: &str = "fn-lock";
 const REPORT_RATE: &str = "report-rate";
 const BACKLIGHT: &str = "backlight";
 const EASY_SWITCH: &str = "easy-switch";
+const ONBOARD_BUTTONS: &str = "onboard-buttons";
 
 /// Preserve the old budget: one initial attempt and two retries.
 const READ_RETRY_POLICY: RetryPolicy = RetryPolicy {
@@ -78,6 +79,45 @@ pub(crate) struct DeviceReads {
     /// out on; cleared with that read.
     host_renames: BTreeMap<DeviceKey, HostRenames>,
     next_host_rename: u64,
+    onboard_buttons: BTreeMap<DeviceKey, DeviceRead<OnboardButtons>>,
+    /// The onboard-button writes sent per mouse, for the read on the route
+    /// they went out on; cleared with that read.
+    button_writes: BTreeMap<DeviceKey, ButtonWrites>,
+    next_button_write: u64,
+}
+
+/// The onboard-button writes sent to one mouse that have not been answered
+/// yet, the newest one that has, and the mouse's last reading. The agent
+/// applies them one at a time in the order they were sent, so the answer to
+/// one also covers every earlier write, and none of the later ones.
+#[derive(Default)]
+struct ButtonWrites {
+    /// Oldest first: the number, the zero-based button and the action.
+    pending: Vec<(u64, u8, OnboardAction)>,
+    answered: u64,
+    /// The buttons as the mouse last reported them, without the pending
+    /// actions.
+    reading: Option<Arc<OnboardButtons>>,
+    /// Why the newest answered write did not land, until another is sent or
+    /// one lands.
+    refused: Option<OnboardButtonRefusal>,
+}
+
+impl ButtonWrites {
+    /// `buttons` as the mouse will hold them once the unanswered writes land:
+    /// each pending action over its button, the newer over the older.
+    fn shown(&self, buttons: Arc<OnboardButtons>) -> Arc<OnboardButtons> {
+        if self.pending.is_empty() {
+            return buttons;
+        }
+        let mut shown = (*buttons).clone();
+        for (_, button, action) in &self.pending {
+            if let Some(entry) = shown.buttons.get_mut(usize::from(*button)) {
+                entry.binding = OnboardBinding::Action(action.clone());
+            }
+        }
+        Arc::new(shown)
+    }
 }
 
 /// The Easy-Switch host renames sent to one device that have not been
@@ -886,6 +926,191 @@ impl DeviceReads {
         self.easy_switch.get(key).map(|read| &read.load)
     }
 
+    /// Start the onboard-button query unless the same mouse route is already
+    /// subscribed. A write goes out through [`Self::begin_button_write`] and
+    /// is answered through [`Self::finish_button_write`].
+    pub(crate) fn ensure_onboard_buttons(
+        &mut self,
+        key: DeviceKey,
+        route: DeviceRoute,
+        commands: mpsc::UnboundedSender<Command>,
+        cx: &mut Context<AppState>,
+    ) {
+        if self
+            .onboard_buttons
+            .get(&key)
+            .is_some_and(|read| read.route == route)
+        {
+            return;
+        }
+        self.remove_onboard_buttons(&key);
+        let Some((client, runtime)) = self.cache() else {
+            return;
+        };
+        let flight = self.take_flight();
+        let fetch_route = route.clone();
+        let fetcher = Retry::new(
+            runtime,
+            move |_| {
+                let commands = commands.clone();
+                let route = fetch_route.clone();
+                read_ipc(
+                    move |reply| ReadOnboardButtons { route, reply }.into(),
+                    commands,
+                )
+            },
+            READ_RETRY_POLICY,
+        )
+        .retry_if(|error| !onboard_buttons_error_is_permanent(error));
+        let handle = client.subscribe(
+            query_key(ONBOARD_BUTTONS, &key),
+            fetcher,
+            QueryOptions::immutable(),
+        );
+        read_through(&client, ONBOARD_BUTTONS, &key, &handle);
+        let query = Query::new(&client, handle, cx);
+        let load = project_load(query.read(cx), onboard_buttons_error_is_permanent);
+        let observed_key = key.clone();
+        let observer = cx.observe(query.state(), move |state, query_state, cx| {
+            let load = project_load(query_state.read(cx), onboard_buttons_error_is_permanent);
+            if state
+                .device_reads_mut()
+                .update_onboard_buttons(&observed_key, flight, load)
+            {
+                cx.emit(StateEvent::OnboardButtonsChanged(observed_key.clone()));
+            }
+        });
+        self.onboard_buttons.insert(
+            key,
+            DeviceRead {
+                route,
+                flight,
+                load,
+                query,
+                _observer: observer,
+            },
+        );
+    }
+
+    /// Show `action` on `key`'s onboard `button` while it is written, and
+    /// number the write. `None` when no reading is subscribed on `route`, the
+    /// connection the write goes out on: there is then nothing to show it on
+    /// or to match its answer to.
+    pub(crate) fn begin_button_write(
+        &mut self,
+        key: &DeviceKey,
+        route: &DeviceRoute,
+        button: u8,
+        action: &OnboardAction,
+    ) -> Option<u64> {
+        let read = self
+            .onboard_buttons
+            .get_mut(key)
+            .filter(|read| read.route == *route)?;
+        let Load::Ready(shown) = &read.load else {
+            return None;
+        };
+        let writes = self.button_writes.entry(key.clone()).or_default();
+        if writes.pending.is_empty() {
+            writes.reading = Some(shown.clone());
+        }
+        self.next_button_write += 1;
+        let write = self.next_button_write;
+        writes.pending.push((write, button, action.clone()));
+        writes.refused = None;
+        if let Some(reading) = writes.reading.clone() {
+            read.load = Load::Ready(writes.shown(reading));
+        }
+        Some(write)
+    }
+
+    /// The mouse's answer to write `write`, which went out on `route`: the
+    /// buttons it reads back, shown with the writes sent after `write` still
+    /// applied, or — when it refused or could not be reached — the refusal,
+    /// kept for the card, and a re-read, with the last reading on screen while
+    /// it answers.
+    ///
+    /// Like [`Self::finish_host_rename`], only the read subscribed on `route`
+    /// takes the answer, and an answer older than one already taken is
+    /// dropped. Returns whether the answer was taken.
+    pub(crate) fn finish_button_write(
+        &mut self,
+        key: &DeviceKey,
+        route: &DeviceRoute,
+        write: u64,
+        result: Result<OnboardButtons, WriteError>,
+    ) -> bool {
+        let Some(read) = self
+            .onboard_buttons
+            .get_mut(key)
+            .filter(|read| read.route == *route)
+        else {
+            return false;
+        };
+        let writes = self.button_writes.entry(key.clone()).or_default();
+        if write <= writes.answered {
+            return false;
+        }
+        writes.answered = write;
+        let button = writes
+            .pending
+            .iter()
+            .find(|&&(pending, ..)| pending == write)
+            .map(|&(_, button, _)| button);
+        writes.pending.retain(|&(pending, ..)| pending > write);
+        match result {
+            Ok(buttons) => {
+                writes.refused = None;
+                let value = Arc::new(buttons);
+                writes.reading = Some(value.clone());
+                read.load = Load::Ready(writes.shown(value.clone()));
+                if let Some(client) = &self.client {
+                    client.set::<_, Cached<OnboardButtons>, WriteError>(
+                        query_key(ONBOARD_BUTTONS, key),
+                        Some(value),
+                    );
+                }
+            }
+            Err(error) => {
+                writes.refused = button.map(|button| OnboardButtonRefusal { button, error });
+                if let Some(reading) = writes.reading.clone() {
+                    read.load = Load::Ready(writes.shown(reading));
+                }
+                read.query.revalidate();
+            }
+        }
+        true
+    }
+
+    /// Why `key`'s newest answered onboard-button write did not land, while
+    /// no write has been sent or landed since.
+    #[must_use]
+    pub(crate) fn button_refusal(&self, key: &DeviceKey) -> Option<&OnboardButtonRefusal> {
+        self.button_writes
+            .get(key)
+            .and_then(|writes| writes.refused.as_ref())
+    }
+
+    /// Re-read `key`'s onboard buttons: retry an exhausted query, or catch up
+    /// with a profile the mouse switched to on its own, keeping the shown
+    /// buttons while it answers.
+    pub(crate) fn retry_onboard_buttons(&mut self, key: &DeviceKey) {
+        let Some(read) = self.onboard_buttons.get_mut(key) else {
+            return;
+        };
+        if !matches!(read.load, Load::Ready(_)) {
+            read.load = Load::Loading;
+        }
+        read.query.revalidate();
+    }
+
+    /// `key`'s onboard-button load, or `None` while nothing has subscribed to
+    /// it.
+    #[must_use]
+    pub(crate) fn onboard_buttons_load(&self, key: &DeviceKey) -> Option<&OnboardButtonsLoad> {
+        self.onboard_buttons.get(key).map(|read| &read.load)
+    }
+
     /// Re-read `key`'s settings after the device reported changing one
     /// itself, keeping the shown values while it answers. Covers the settings
     /// such a report can concern — DPI, Fn lock, report rate and backlight (see
@@ -968,6 +1193,7 @@ impl DeviceReads {
         self.remove_report_rate(key);
         self.remove_backlight(key);
         self.remove_easy_switch(key);
+        self.remove_onboard_buttons(key);
     }
 
     pub(crate) fn remove_dpi(&mut self, key: &DeviceKey) {
@@ -1014,6 +1240,14 @@ impl DeviceReads {
         }
     }
 
+    fn remove_onboard_buttons(&mut self, key: &DeviceKey) {
+        self.button_writes.remove(key);
+        if let Some(read) = self.onboard_buttons.remove(key) {
+            drop(read);
+            self.clear::<OnboardButtons>(ONBOARD_BUTTONS, key);
+        }
+    }
+
     /// Forget every query whose device is no longer present.
     pub(crate) fn retain_present(&mut self, present: impl Fn(&str) -> bool) {
         let removed: BTreeSet<_> = self
@@ -1024,6 +1258,7 @@ impl DeviceReads {
             .chain(self.report_rate.keys())
             .chain(self.backlight.keys())
             .chain(self.easy_switch.keys())
+            .chain(self.onboard_buttons.keys())
             .filter(|key| !present(key.as_str()))
             .cloned()
             .collect();
@@ -1142,6 +1377,33 @@ impl DeviceReads {
         true
     }
 
+    fn update_onboard_buttons(
+        &mut self,
+        key: &DeviceKey,
+        flight: u64,
+        load: OnboardButtonsLoad,
+    ) -> bool {
+        let Some(read) = self
+            .onboard_buttons
+            .get_mut(key)
+            .filter(|read| read.flight == flight)
+        else {
+            return false;
+        };
+        let load = match (load, self.button_writes.get_mut(key)) {
+            (Load::Ready(buttons), Some(writes)) => {
+                writes.reading = Some(buttons.clone());
+                Load::Ready(writes.shown(buttons))
+            }
+            (load, _) => load,
+        };
+        if read.load == load {
+            return false;
+        }
+        read.load = load;
+        true
+    }
+
     fn update_smartshift(&mut self, key: &DeviceKey, flight: u64, load: SmartShiftLoad) -> bool {
         let Some(read) = self
             .smartshift
@@ -1246,6 +1508,15 @@ fn backlight_error_is_permanent(error: &WriteError) -> bool {
 
 fn easy_switch_error_is_permanent(error: &WriteError) -> bool {
     matches!(error, WriteError::FeatureUnsupported { .. })
+}
+
+/// A mouse without the feature, or with an onboard layout OpenLogi does not
+/// decode, answers the same however often it is asked.
+fn onboard_buttons_error_is_permanent(error: &WriteError) -> bool {
+    matches!(
+        error,
+        WriteError::FeatureUnsupported { .. } | WriteError::OnboardProfileNotWritable
+    )
 }
 
 /// Stale data remains renderable while SWR revalidates, but only the settled

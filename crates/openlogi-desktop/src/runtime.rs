@@ -325,6 +325,18 @@ impl Runtime {
                     });
                 });
             }
+            ipc::GuiUpdate::OnboardButtonWritten {
+                key,
+                route,
+                write,
+                result,
+            } => {
+                cx.update(|cx| {
+                    AppState::apply(cx, |state| {
+                        state.apply_onboard_button_written(&key, &route, write, result)
+                    });
+                });
+            }
             ipc::GuiUpdate::DeviceUnpaired {
                 route,
                 intent,

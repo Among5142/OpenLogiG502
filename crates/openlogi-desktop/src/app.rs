@@ -71,6 +71,9 @@ enum Route {
 enum DetailTab {
     /// The mouse model with clickable button hotspots.
     Buttons,
+    /// The buttons a G-series mouse binds in its onboard profile (HID++
+    /// `0x8100`), rebound on the mouse itself.
+    OnboardButtons,
     /// Cursor-centred eight-slot action launcher.
     ActionsRing,
     /// The keyboard function-row remapper with clickable F-key bubbles.
@@ -125,6 +128,12 @@ impl DetailTab {
         if caps.buttons && can_show_mouse_model {
             tabs.push(Self::Buttons);
         }
+        // A G-series mouse binds its buttons in an onboard profile instead
+        // of (or as well as) `0x1b04`. Without `0x1b04` this is the mouse's
+        // only button screen, so it opens first.
+        if caps.onboard_buttons && can_show_mouse_model {
+            tabs.push(Self::OnboardButtons);
+        }
         // The Keys tab needs something to bind: HID++ controls (measured, or
         // last-good for a sleeping keyboard) or the OS-hook F-row a depot
         // without control markers falls back to. A keyboard with neither
@@ -174,6 +183,7 @@ impl DetailTab {
     fn label(self) -> gpui::SharedString {
         match self {
             Self::Buttons => tr!("device.buttons"),
+            Self::OnboardButtons => tr!("device.onboard_buttons"),
             Self::ActionsRing => tr!("action_ring.actions_ring"),
             Self::Keys => tr!("device.keys"),
             Self::Pointer => tr!("device.pointer"),
@@ -337,6 +347,9 @@ impl AppView {
             | StateEvent::BacklightChanged(key)
             | StateEvent::EasySwitchChanged(key) => {
                 !on_home && self.active_tab == DetailTab::Device && is_current(key)
+            }
+            StateEvent::OnboardButtonsChanged(key) => {
+                !on_home && self.active_tab == DetailTab::OnboardButtons && is_current(key)
             }
             StateEvent::LightingChanged(key) => {
                 on_home || (self.active_tab == DetailTab::Light && is_current(key))

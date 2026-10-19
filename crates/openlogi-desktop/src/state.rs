@@ -32,8 +32,10 @@ pub(crate) use events::{StateEvent, StateEvents};
 pub use light::LightCommandStatus;
 pub(crate) use load::Load;
 pub use load::{
-    BacklightLoad, DpiLoad, EasySwitchLoad, FnLockLoad, ReportRateLoad, SmartShiftLoad,
+    BacklightLoad, DpiLoad, EasySwitchLoad, FnLockLoad, OnboardButtonsLoad, ReportRateLoad,
+    SmartShiftLoad,
 };
+pub(crate) use onboard_buttons::OnboardButtonRefusal;
 
 /// Result of confirming a SmartShift write by reading the value back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +83,7 @@ mod inventory;
 mod light;
 mod lighting;
 mod load;
+mod onboard_buttons;
 mod os_layout;
 mod pointer;
 mod report_rate;
@@ -229,6 +232,7 @@ impl AppState {
             state.load_current_report_rate(cx);
             state.load_current_backlight(cx);
             state.load_current_easy_switch(cx);
+            state.load_current_onboard_buttons(cx);
         });
     }
 

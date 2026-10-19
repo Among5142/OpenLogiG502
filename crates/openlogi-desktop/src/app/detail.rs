@@ -43,6 +43,7 @@ use crate::ui::theme::{
 
 mod backlight;
 mod easy_switch;
+mod onboard_buttons;
 
 const CAMERA_PREVIEW_W: Rems = rems(32.125);
 const CAMERA_CONTROLS_W: Rems = rems(31.25);
@@ -124,6 +125,7 @@ pub(super) fn detail_content(
         DetailTab::ActionsRing => {
             action_ring_tab(panels.action_ring, profile_icons, app_catalog, cx).into_any_element()
         }
+        DetailTab::OnboardButtons => onboard_buttons_tab(cx).into_any_element(),
         DetailTab::Keys => keys_tab(panels.keyboard_model).into_any_element(),
         DetailTab::Pointer => {
             pointer_tab(panels.dpi_panel, panels.smartshift_panel, cx).into_any_element()
@@ -241,7 +243,7 @@ fn detail_navigation(
 
 fn detail_tab_icon(tab: DetailTab) -> &'static str {
     match tab {
-        DetailTab::Buttons => "action-icons/mouse-pointer-click.svg",
+        DetailTab::Buttons | DetailTab::OnboardButtons => "action-icons/mouse-pointer-click.svg",
         DetailTab::ActionsRing => "action-icons/layout-grid.svg",
         DetailTab::Keys => "action-icons/keyboard.svg",
         DetailTab::Pointer => "action-icons/gauge.svg",
@@ -279,6 +281,22 @@ fn tab_body(
         .overflow_y_scrollbar()
         .p(SCREEN_PAD.rems())
         .child(div().w_full().max_w(width.rems()).child(content))
+}
+
+/// Onboard Buttons tab: the buttons of a G-series mouse's active onboard
+/// profile.
+fn onboard_buttons_tab(cx: &mut Context<AppView>) -> impl IntoElement {
+    let pal = theme::palette(cx);
+    tab_body(
+        ContentWidth::Small,
+        v_flex()
+            .w_full()
+            .gap_3()
+            .children(onboard_buttons::onboard_buttons_card(
+                onboard_buttons::OnboardButtonsFacts::current(cx),
+                pal,
+            )),
+    )
 }
 
 /// Keys tab: the function-row remapper for a keyboard.

@@ -19,7 +19,8 @@ use std::future::Future;
 use openlogi_core::config::{ConfigRevision, Lighting};
 use openlogi_core::hid::{
     BacklightChange, BacklightState, DeviceRoute, Dpi, DpiInfo, EasySwitchHosts, FnLockState,
-    LightCommand, ReceiverSelector, ReportRate, ReportRateInfo, SmartShiftStatus, WriteError,
+    LightCommand, OnboardAction, OnboardButtons, ReceiverSelector, ReportRate, ReportRateInfo,
+    SmartShiftStatus, WriteError,
 };
 use openlogi_ipc::{
     AgentClient, ChosenLight, ConfigReloadError, PairingCommandError, PairingFailure, SavedConfig,
@@ -262,6 +263,44 @@ impl Request for RenameEasySwitchHost {
     }
 }
 
+/// Bind one button of a G-series mouse's active onboard profile now,
+/// answered as [`GuiUpdate::OnboardButtonWritten`] with the buttons the mouse
+/// reads back.
+pub struct SetOnboardButton {
+    pub route: DeviceRoute,
+    /// Zero-based button.
+    pub button: u8,
+    pub action: OnboardAction,
+    pub key: DeviceKey,
+    /// The number the device-read service gave this write, returned with the
+    /// answer so it is matched to the write it answers.
+    pub write: u64,
+}
+
+impl Request for SetOnboardButton {
+    type Answer = Result<OnboardButtons, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        client
+            .set_onboard_button(
+                context::current(),
+                self.route.clone(),
+                self.button,
+                self.action.clone(),
+            )
+            .await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, updates: &UpdateSender) {
+        let _ = updates.send(GuiUpdate::OnboardButtonWritten {
+            key: self.key,
+            route: self.route,
+            write: self.write,
+            result: or_unavailable(outcome),
+        });
+    }
+}
+
 /// Apply a SmartShift configuration now.
 pub struct SetSmartShift {
     pub route: DeviceRoute,
@@ -445,6 +484,27 @@ impl Request for ReadEasySwitchHosts {
     async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
         client
             .read_easy_switch_hosts(context::current(), self.route.clone())
+            .await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, _: &UpdateSender) {
+        let _ = self.reply.send(or_unavailable(outcome));
+    }
+}
+
+/// Read the buttons of a G-series mouse's active onboard profile; the answer
+/// goes back over `reply`.
+pub struct ReadOnboardButtons {
+    pub route: DeviceRoute,
+    pub reply: oneshot::Sender<Result<OnboardButtons, WriteError>>,
+}
+
+impl Request for ReadOnboardButtons {
+    type Answer = Result<OnboardButtons, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        client
+            .read_onboard_buttons(context::current(), self.route.clone())
             .await
     }
 
@@ -725,12 +785,14 @@ commands! {
     SetReportRate,
     SetBacklight,
     RenameEasySwitchHost,
+    SetOnboardButton,
     ReadDpi,
     ReadSmartShift,
     ReadFnLock,
     ReadReportRate,
     ReadBacklight,
     ReadEasySwitchHosts,
+    ReadOnboardButtons,
     LoadConfig,
     ReloadConfig,
     RequestAccessibilityPrompt,

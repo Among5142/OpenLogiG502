@@ -1245,3 +1245,46 @@ fn receiver_slot_is_named_only_for_receiver_routes() {
     assert_eq!(connection_summary(&direct), "Direct connection");
 }
 
+/// A G-series mouse such as the G502 X LIGHTSPEED binds its buttons in a
+/// `0x8100` onboard profile and has no `0x1b04` controls: the Onboard Buttons
+/// tab is its only button screen, so it opens on it. A mouse with both keeps
+/// its host-side Buttons tab first.
+#[test]
+fn an_onboard_profile_mouse_opens_on_its_onboard_buttons() {
+    let g502x = Some(Capabilities {
+        pointer: true,
+        hires_wheel: true,
+        report_rate: true,
+        onboard_buttons: true,
+        ..Capabilities::default()
+    });
+    let mouse = record(DeviceKind::Mouse, g502x);
+    assert_eq!(
+        DetailTab::tabs_for(&mouse),
+        vec![
+            DetailTab::OnboardButtons,
+            DetailTab::Pointer,
+            DetailTab::Device
+        ]
+    );
+    assert_eq!(DetailTab::default_for(&mouse), DetailTab::OnboardButtons);
+
+    let both = Some(Capabilities {
+        buttons: true,
+        pointer: true,
+        onboard_buttons: true,
+        ..Capabilities::default()
+    });
+    let tabs = DetailTab::tabs_for(&record(DeviceKind::Mouse, both));
+    assert_eq!(&tabs[..2], &[DetailTab::Buttons, DetailTab::OnboardButtons]);
+
+    let keyboard = Some(Capabilities {
+        onboard_buttons: true,
+        ..Capabilities::default()
+    });
+    assert!(
+        !DetailTab::tabs_for(&record(DeviceKind::Keyboard, keyboard))
+            .contains(&DetailTab::OnboardButtons),
+        "the tab is for pointer devices"
+    );
+}
