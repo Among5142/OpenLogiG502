@@ -516,7 +516,7 @@ mod tests {
         }
     }
 
-    /// A synthetic format-0x05 sector shaped like a stock G502 X profile:
+    /// A synthetic sector shaped like a stock G502 X profile:
     /// 1 ms reports, DPI 800/1600/3200 with the 400-DPI shift slot, and the
     /// libratbag default button order (left, right, middle, back, forward,
     /// tilt left/right, DPI up/down, DPI shift, G-shift).
@@ -578,6 +578,74 @@ mod tests {
                 .gshift_buttons
                 .iter()
                 .all(|b| *b == Ok(ButtonBinding::Unassigned))
+        );
+    }
+
+    /// User profile sector `0x0002` read from a G502 X LIGHTSPEED
+    /// (profile format `0x03`, firmware MPM30.00_B0014) with
+    /// `openlogi diag profiles`. Its stored CRC was written by the firmware or
+    /// G HUB, so matching it pins [`crc_ccitt`] to real hardware.
+    const G502X_PROFILE_2: &str = "\
+        02 02 00 20 03 b0 04 40 06 60 09 80 0c ff ff ff \
+        ff 00 ff ff ff ff ff ff ff ff ff ff 3c 00 2c 01 \
+        80 01 00 01 80 01 00 02 80 01 00 04 80 01 00 08 \
+        90 0b 00 00 80 01 00 10 90 01 00 00 90 02 00 00 \
+        90 0a 00 00 90 03 00 00 90 04 00 00 90 10 00 00 \
+        90 11 00 00 ff ff ff ff ff ff ff ff ff ff ff ff \
+        80 01 00 01 80 01 00 02 80 02 01 17 80 01 00 08 \
+        ff ff ff ff 80 01 00 10 80 02 03 2b 80 02 01 2b \
+        80 02 01 27 80 02 01 1d 80 02 01 1b 80 03 00 ea \
+        80 03 00 e9 ff ff ff ff ff ff ff ff ff ff ff ff \
+        ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff \
+        ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff \
+        ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff \
+        0f 00 00 00 00 00 00 00 64 00 00 0f 00 00 00 00 \
+        00 00 00 64 00 00 10 00 00 00 00 00 00 00 64 00 \
+        00 10 00 00 00 00 00 00 00 64 00 00 00 3b 0d";
+
+    fn hex(text: &str) -> Vec<u8> {
+        text.split_whitespace()
+            .map(|b| u8::from_str_radix(b, 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_real_g502x_profile_sector_validates_and_decodes() {
+        let sector = hex(G502X_PROFILE_2);
+        assert_eq!(sector.len(), 255);
+        assert!(sector_crc_valid(&sector));
+
+        let profile = ProfileSector::decode(&sector).unwrap();
+        assert_eq!(profile.report_interval_ms, 2);
+        assert_eq!(profile.default_dpi_index, 2);
+        assert_eq!(profile.dpi, [800, 1200, 1600, 2400, 3200]);
+        assert_eq!(profile.name, None);
+        assert_eq!(
+            profile.buttons[4],
+            Ok(ButtonBinding::Function {
+                function: ButtonFunction::GShift,
+                data: 0,
+            })
+        );
+        assert_eq!(
+            profile.buttons[9],
+            Ok(ButtonBinding::Function {
+                function: ButtonFunction::NextDpi,
+                data: 0,
+            })
+        );
+        assert_eq!(
+            profile.gshift_buttons[6],
+            Ok(ButtonBinding::Key {
+                modifiers: KeyModifiers::LEFT_CTRL | KeyModifiers::LEFT_SHIFT,
+                usage: 0x2b,
+            })
+        );
+        assert_eq!(profile.gshift_buttons[4], Ok(ButtonBinding::Unassigned));
+        // Slots past the mouse's 11 buttons still carry G HUB's defaults.
+        assert_eq!(
+            profile.gshift_buttons[11],
+            Ok(ButtonBinding::Consumer(0x00ea))
         );
     }
 

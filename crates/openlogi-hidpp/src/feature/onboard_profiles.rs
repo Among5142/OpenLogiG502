@@ -35,8 +35,9 @@ const FN_MEMORY_READ: u8 = 0x5;
 pub const SUPPORTED_MEMORY_MODEL: u8 = 0x01;
 
 /// Profile formats whose layout [`layout::ProfileSector`] decodes: `0x01`
-/// (G402) through `0x05` (G502 X). libratbag validates the same range;
-/// Solaar refuses anything above `0x05`.
+/// (G402) through `0x05` (libratbag's "G502X" type). libratbag validates the
+/// same range; Solaar refuses anything above `0x05`. A G502 X LIGHTSPEED
+/// (firmware MPM30.00_B0014) reports `0x03`.
 pub const SUPPORTED_PROFILE_FORMATS: std::ops::RangeInclusive<u8> = 0x01..=0x05;
 
 /// The macro format both references support.
@@ -161,8 +162,9 @@ impl OnboardProfilesFeature {
     /// address. That reading is inferred, not documented: libratbag takes
     /// byte 1 alone as the profile index and needs an `INDEX_OFFSET` quirk
     /// for the G502 X because it answers `1` for the first profile — which
-    /// is exactly user sector `0x0001`. Callers match the result against
-    /// [`layout::DirectoryEntry::sector`].
+    /// is exactly user sector `0x0001`, and a G502 X LIGHTSPEED running its
+    /// first directory profile does answer `00 01`. Callers match the result
+    /// against [`layout::DirectoryEntry::sector`].
     pub async fn get_current_profile_sector(&self) -> Result<u16, Hidpp20Error> {
         let p = self
             .endpoint

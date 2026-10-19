@@ -177,6 +177,19 @@ pub struct DirectoryDump {
     pub entries: Result<Vec<DirectoryEntry>, LayoutError>,
 }
 
+/// What a profile sector's trailing checksum says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SectorCrc {
+    /// The stored CRC matches the contents.
+    Valid,
+    /// The stored CRC does not match; firmware ignores such a user sector.
+    Mismatch,
+    /// A factory (ROM) sector. ROM sectors store `00 00` where user sectors
+    /// keep their CRC (seen on a G502 X LIGHTSPEED), and libratbag reads
+    /// them without checking, so nothing is compared.
+    NotStored,
+}
+
 /// One profile sector as read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectorDump {
@@ -186,8 +199,8 @@ pub struct SectorDump {
     pub rom: bool,
     /// The directory's enabled flag; `None` for ROM sectors.
     pub enabled: Option<bool>,
-    /// Whether the sector's CRC matched.
-    pub crc_valid: bool,
+    /// The sector's checksum state.
+    pub crc: SectorCrc,
     /// The decoded profile.
     pub profile: Result<ProfileSector, LayoutError>,
     /// The sector bytes exactly as read, for checking the decoder.
@@ -246,7 +259,11 @@ pub async fn dump_onboard_profiles(
                 sector,
                 rom: enabled.is_none(),
                 enabled,
-                crc_valid: layout::sector_crc_valid(&raw),
+                crc: match (enabled, layout::sector_crc_valid(&raw)) {
+                    (None, _) => SectorCrc::NotStored,
+                    (Some(_), true) => SectorCrc::Valid,
+                    (Some(_), false) => SectorCrc::Mismatch,
+                },
                 profile: ProfileSector::decode(&raw),
                 raw,
             });

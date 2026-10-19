@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 use anyhow::{Context, Result};
 use clap::Args;
 use openlogi_hid::onboard_profiles::layout::{BINDING_SLOTS, ButtonBinding, UnknownBinding};
-use openlogi_hid::write::{OnboardProfilesDump, SectorDump};
+use openlogi_hid::write::{OnboardProfilesDump, SectorCrc, SectorDump};
 
 use crate::cmd::diag::select_device;
 
@@ -110,7 +110,11 @@ fn render_sector(out: &mut String, sector: &SectorDump, buttons: usize, gshift: 
         out,
         "  {kind} profile, sector 0x{:04x}{enabled} (crc {}):",
         sector.sector,
-        crc_label(sector.crc_valid)
+        match sector.crc {
+            SectorCrc::Valid => crc_label(true),
+            SectorCrc::Mismatch => crc_label(false),
+            SectorCrc::NotStored => "not stored",
+        }
     );
     match &sector.profile {
         Ok(profile) => {
@@ -175,7 +179,7 @@ fn binding_label(binding: Result<ButtonBinding, UnknownBinding>) -> String {
 mod tests {
     use openlogi_hid::onboard_profiles::layout::{self, DirectoryEntry, ProfileSector};
     use openlogi_hid::onboard_profiles::{MechanicalLayout, OnboardMode, OnboardProfilesInfo};
-    use openlogi_hid::write::{DirectoryDump, OnboardProfilesDump, SectorDump};
+    use openlogi_hid::write::{DirectoryDump, OnboardProfilesDump, SectorCrc, SectorDump};
 
     use super::render;
 
@@ -225,7 +229,7 @@ mod tests {
                 sector: 1,
                 rom: false,
                 enabled: Some(true),
-                crc_valid: layout::sector_crc_valid(&raw),
+                crc: SectorCrc::Valid,
                 profile: ProfileSector::decode(&raw),
                 raw,
             }],
