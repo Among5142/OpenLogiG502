@@ -27,8 +27,9 @@ use openlogi_core::device::{
 use openlogi_core::device_order::{DeviceIdentity, PhysicalDeviceKey};
 use openlogi_hid::{
     BacklightChange, BacklightState, CaptureChannelSlot, ChannelPool, ChannelRegistry,
-    DeviceIoGate, DeviceRoute, EasySwitchHosts, FnLockState, HidppOperation, HostOs, ReportRate,
-    ReportRateInfo, WriteError, commands_for_light_settings, is_reserved_keyboard_control,
+    DeviceIoGate, DeviceRoute, EasySwitchHosts, FnLockState, HidppOperation, HostOs, OnboardAction,
+    OnboardButtons, ReportRate, ReportRateInfo, WriteError, commands_for_light_settings,
+    is_reserved_keyboard_control,
 };
 #[cfg(test)]
 use openlogi_ipc::ChosenLight;
@@ -160,6 +161,10 @@ pub struct SharedHandles {
     backlight_order: WriteOrder,
     /// Orders host renames per device.
     host_name_order: WriteOrder,
+    /// Orders onboard-button writes per mouse. Each rewrites the whole
+    /// active profile sector, so every write runs, strictly in request
+    /// order, or two picks would each overwrite the other's button.
+    onboard_button_order: WriteOrder,
     /// The running inventory watcher's refresh handle, published at arming;
     /// `None` while no watcher runs.
     inventory_refresh: Arc<RwLock<Option<InventoryRefresh>>>,
@@ -300,6 +305,34 @@ impl SharedHandles {
             .run_in_order(HidppOperation::RenameHost, ticket, move |c| async move {
                 openlogi_hid::rename_easy_switch_host_on(&c, slot, &name).await
             })
+            .await
+    }
+
+    /// Bind `button` of the active onboard profile of the mouse on `route` to
+    /// `action` and answer with the buttons it reads back. Writes to one
+    /// mouse run one at a time, in request order. A key chord's Command
+    /// modifier is stored as this computer's primary modifier.
+    pub async fn set_onboard_button(
+        &self,
+        route: &DeviceRoute,
+        button: u8,
+        action: OnboardAction,
+    ) -> Result<OnboardButtons, WriteError> {
+        let ticket = self.onboard_button_order.request(route);
+        self.device(route)
+            .run_in_order(
+                HidppOperation::WriteOnboardButton,
+                ticket,
+                move |c| async move {
+                    openlogi_hid::set_onboard_button_on(
+                        &c,
+                        button,
+                        &action,
+                        openlogi_core::binding::CommandModifier::for_this_host(),
+                    )
+                    .await
+                },
+            )
             .await
     }
 
@@ -471,6 +504,7 @@ impl Orchestrator {
             report_rate_order: WriteOrder::default(),
             backlight_order: WriteOrder::default(),
             host_name_order: WriteOrder::default(),
+            onboard_button_order: WriteOrder::default(),
             inventory_refresh: Arc::new(RwLock::new(None)),
         };
         let orch = Self {

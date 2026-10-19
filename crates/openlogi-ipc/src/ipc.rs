@@ -20,8 +20,8 @@ use openlogi_core::device::{
 };
 use openlogi_core::hid::{
     BacklightChange, BacklightState, DeviceRoute, Dpi, DpiInfo, EasySwitchHosts, FnLockState,
-    LightCommand, PairingError, PasskeyMethod, ReceiverSelector, ReportRate, ReportRateInfo,
-    ScrollWheelMode, SmartShiftStatus, WriteError,
+    LightCommand, OnboardAction, OnboardButtons, PairingError, PasskeyMethod, ReceiverSelector,
+    ReportRate, ReportRateInfo, ScrollWheelMode, SmartShiftStatus, WriteError,
 };
 use serde::{Deserialize, Serialize};
 pub use succession::Identity;
@@ -120,6 +120,12 @@ pub use succession::Identity;
 ///      battery. `Agent::observe_lock_keys`, [`LockKeyObservation`] and
 ///      [`LockKeyChange`] appended — the lock key a keyboard turned on or
 ///      off over HID++ `0x4220`, for the overlay's transient indicator.
+///      `Agent::{read_onboard_buttons, set_onboard_button}`,
+///      `Capabilities::onboard_buttons`, `OnboardButtons` and its types,
+///      `HidppOperation::{ReadOnboardButtons, WriteOnboardButton}` and
+///      `WriteError::{OnboardProfileNotWritable, OnboardButtonUnsupported,
+///      OnboardBindingNotApplied}` appended — the buttons a G-series mouse
+///      binds in its HID++ `0x8100` onboard profile, and rebinding one.
 pub const PROTOCOL_VERSION: u32 = 37;
 
 /// Environment variable through which the agent hands a supervised helper the
@@ -827,4 +833,23 @@ pub trait Agent {
     /// generation `since`, or with the unchanged indicator after
     /// [`OBSERVE_HOLD`]. Pass `0` to read the current indicator at once.
     async fn observe_lock_keys(since: Generation) -> LockKeyObservation;
+
+    /// Read the buttons of the active onboard profile of the G-series mouse
+    /// on `route` (HID++ `0x8100`): what each is bound to now, and what its
+    /// factory profile binds it to.
+    async fn read_onboard_buttons(route: DeviceRoute) -> Result<OnboardButtons, WriteError>;
+
+    /// Bind `button` (zero-based) of the active onboard profile of the mouse
+    /// on `route` to `action`, and answer with the buttons it reads back.
+    /// The mouse stores the binding itself, so nothing is persisted or
+    /// replayed, and every other byte of the profile is kept. Refused with
+    /// [`WriteError::OnboardProfileNotWritable`] or
+    /// [`WriteError::OnboardButtonUnsupported`] before anything is written;
+    /// a binding the mouse does not keep fails with
+    /// [`WriteError::OnboardBindingNotApplied`].
+    async fn set_onboard_button(
+        route: DeviceRoute,
+        button: u8,
+        action: OnboardAction,
+    ) -> Result<OnboardButtons, WriteError>;
 }

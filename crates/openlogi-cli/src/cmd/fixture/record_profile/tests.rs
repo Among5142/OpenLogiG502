@@ -10,7 +10,8 @@ use openlogi_core::device::DeviceInventory;
 use openlogi_core::hid::{
     BacklightChange, BacklightControls, BacklightMode, BacklightState, BacklightStatus, Dpi,
     DpiInfo, EasySwitchHosts, EasySwitchSlot, FnLockState, HostConnection, LightCommand,
-    PasskeyMethod, ReceiverSelector, ReportRate, ReportRateInfo, ScrollWheelMode, SmartShiftStatus,
+    OnboardAction, OnboardButtons, PasskeyMethod, ReceiverSelector, ReportRate, ReportRateInfo,
+    ScrollWheelMode, SmartShiftStatus,
 };
 use openlogi_fixture::{
     CANONICAL_DEVICE_PROFILE_JSON, SyntheticIdentityKind, classify_synthetic_identity_bytes,
@@ -390,6 +391,22 @@ impl Agent for TestAgent {
 
     async fn observe_lock_keys(self, _: TarpcContext, _since: Generation) -> LockKeyObservation {
         unreachable!("profile capture must not inspect the lock-key indicator")
+    }
+    async fn read_onboard_buttons(
+        self,
+        _: TarpcContext,
+        _route: DeviceRoute,
+    ) -> Result<OnboardButtons, WriteError> {
+        unreachable!("profile capture does not record onboard buttons")
+    }
+    async fn set_onboard_button(
+        self,
+        _: TarpcContext,
+        _route: DeviceRoute,
+        _button: u8,
+        _action: OnboardAction,
+    ) -> Result<OnboardButtons, WriteError> {
+        unreachable!("profile capture must never rebind a button")
     }
 }
 

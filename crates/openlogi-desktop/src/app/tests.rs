@@ -1022,6 +1022,7 @@ fn tabs_prefer_buttons_when_a_keyboard_kind_measures_a_pointer() {
         backlight: false,
         easy_switch: false,
         virtual_thumbwheel: false,
+        onboard_buttons: false,
     });
     let tabs = DetailTab::tabs_for(&record(DeviceKind::Keyboard, caps));
     assert!(
@@ -1055,6 +1056,7 @@ fn tabs_follow_capabilities_not_kind() {
         backlight: false,
         easy_switch: false,
         virtual_thumbwheel: false,
+        onboard_buttons: false,
     });
     // After 0x0005 kind-correction the record has kind=Mouse, not Keyboard.
     let tabs = DetailTab::tabs_for(&record(DeviceKind::Mouse, caps));
@@ -1103,6 +1105,7 @@ fn keyboard_without_asset_hides_buttons_tab() {
         backlight: false,
         easy_switch: false,
         virtual_thumbwheel: false,
+        onboard_buttons: false,
     });
     let tabs = DetailTab::tabs_for(&record(DeviceKind::Keyboard, caps));
     assert!(
@@ -1130,6 +1133,7 @@ fn keyboard_with_buttons_shows_keys_tab() {
         backlight: false,
         easy_switch: false,
         virtual_thumbwheel: false,
+        onboard_buttons: false,
     });
     let keyboard = record(DeviceKind::Keyboard, caps);
     let tabs = DetailTab::tabs_for(&keyboard);
@@ -1240,3 +1244,4 @@ fn receiver_slot_is_named_only_for_receiver_routes() {
     assert_eq!(receiver_slot_label(&direct), None);
     assert_eq!(connection_summary(&direct), "Direct connection");
 }
+

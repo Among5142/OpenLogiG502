@@ -44,9 +44,10 @@ use openlogi_core::hid::{
     BacklightChange, BacklightControls, BacklightMode, BacklightState, BacklightStatus, Click,
     DeviceRoute, Dpi, DpiCapabilities, DpiInfo, EasySwitchHosts, EasySwitchSlot, FnLockState,
     HidppFeatureErrorKind, HidppOperation, HostConnection, HostOsInfo, HostOsKind, LightCommand,
-    PasskeyMethod, ReceiverSelector, ReportRate, ReportRateInfo, ScrollReportingTarget,
-    ScrollWheelMode, SmartShiftAutoDisengage, SmartShiftMode, SmartShiftStatus,
-    SmartShiftThreshold, TunableTorque, WriteError,
+    OnboardAction, OnboardBinding, OnboardButton, OnboardButtons, OnboardFunction,
+    OnboardMouseButton, PasskeyMethod, ReceiverSelector, ReportRate, ReportRateInfo,
+    ScrollReportingTarget, ScrollWheelMode, SmartShiftAutoDisengage, SmartShiftMode,
+    SmartShiftStatus, SmartShiftThreshold, TunableTorque, WriteError,
 };
 use openlogi_ipc::{
     ActionRingCommandError, ActionRingInvocation, ActionRingPresentation, AgentRequest,
@@ -657,13 +658,14 @@ fn device_inventory() {
                 backlight: true,
                 easy_switch: true,
                 virtual_thumbwheel: true,
+                onboard_buttons: true,
             }),
             settings_revision: 7,
         }],
     }];
     assert_wire(
         &inventory,
-        "010d426f6c74205265636569766572fb6d04fb48c501084630304443414645010101094d58204d535452335301fb34b00001010150020001030106323134304c5a0102030400010100fb34b0fb8240000b0101010000010101010100010101010107",
+        "010d426f6c74205265636569766572fb6d04fb48c501084630304443414645010101094d58204d535452335301fb34b00001010150020001030106323134304c5a0102030400010100fb34b0fb8240000b010101000001010101010001010101010107",
     );
 }
 
@@ -1033,5 +1035,66 @@ fn report_rate_dtos_and_errors() {
             ],
         },
         "fbe803037dfbf401fbe803",
+    );
+}
+
+#[test]
+fn onboard_buttons_and_errors() {
+    let route = DeviceRoute::Unifying {
+        receiver_uid: "LIGHTSPEED".into(),
+        slot: 1,
+    };
+    assert_wire(
+        &AgentRequest::ReadOnboardButtons {
+            route: route.clone(),
+        },
+        "28010a4c49474854535045454401",
+    );
+    assert_wire(
+        &AgentRequest::SetOnboardButton {
+            route,
+            button: 9,
+            action: OnboardAction::Key("Ctrl+Shift+C".parse::<KeyCombo>().expect("valid chord")),
+        },
+        "29010a4c4947485453504545440109020606",
+    );
+    assert_wire(
+        &OnboardButtons {
+            sector: 1,
+            buttons: vec![
+                OnboardButton {
+                    binding: OnboardBinding::Action(OnboardAction::Mouse(OnboardMouseButton::Back)),
+                    factory: Some(OnboardBinding::Action(OnboardAction::Mouse(
+                        OnboardMouseButton::Back,
+                    ))),
+                },
+                OnboardButton {
+                    binding: OnboardBinding::Macro,
+                    factory: Some(OnboardBinding::Action(OnboardAction::Function(
+                        OnboardFunction::ShiftDpi,
+                    ))),
+                },
+                OnboardButton {
+                    binding: OnboardBinding::Action(OnboardAction::Consumer(0x00e9)),
+                    factory: None,
+                },
+                OnboardButton {
+                    binding: OnboardBinding::Unrecognized([0x90, 0x0d, 0x00, 0x02]),
+                    factory: Some(OnboardBinding::Action(OnboardAction::Disabled)),
+                },
+            ],
+        },
+        "01040001030100010301010004060003e90002900d0002010000",
+    );
+    assert_wire(&HidppOperation::ReadOnboardButtons, "17");
+    assert_wire(&HidppOperation::WriteOnboardButton, "18");
+    assert_wire(&WriteError::OnboardProfileNotWritable, "1a");
+    assert_wire(
+        &WriteError::OnboardButtonUnsupported { button: 11 },
+        "1b0b",
+    );
+    assert_wire(
+        &WriteError::OnboardBindingNotApplied { button: 9 },
+        "1c09",
     );
 }

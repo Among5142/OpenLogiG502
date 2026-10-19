@@ -189,6 +189,11 @@ pub struct Capabilities {
     /// persisted identity.
     #[serde(default)]
     pub virtual_thumbwheel: bool,
+    /// The mouse binds its buttons in an onboard profile — HID++ `0x8100
+    /// OnboardProfiles` — that software can rewrite. Appended: crosses the
+    /// IPC and the persisted identity.
+    #[serde(default)]
+    pub onboard_buttons: bool,
 }
 
 impl Capabilities {
@@ -223,6 +228,7 @@ impl Capabilities {
             // Set by the `0x1b04` control walk; the feature table alone
             // cannot say which controls report raw wheel.
             virtual_thumbwheel: false,
+            onboard_buttons: ids.contains(&0x8100),
         }
     }
 
@@ -737,6 +743,7 @@ mod tests {
                     backlight: false,
                     easy_switch: false,
                     virtual_thumbwheel: false,
+                    onboard_buttons: false,
                 }),
                 settings_revision: 0,
             }],
@@ -855,9 +862,12 @@ mod tests {
                 backlight: false,
                 easy_switch: false,
                 virtual_thumbwheel: false,
+                onboard_buttons: false,
             }
         );
         assert!(!Capabilities::from_feature_ids(&[0x0003, 0x1b04]).thumbwheel);
+        assert!(Capabilities::from_feature_ids(&[0x0001, 0x8100]).onboard_buttons);
+        assert!(!Capabilities::from_feature_ids(&[0x0001, 0x1b04]).onboard_buttons);
         // A wired G-series keyboard: PerKeyLighting (0x8080), no DPI/buttons.
         let keyboard = Capabilities::from_feature_ids(&[0x0001, 0x8080]);
         assert_eq!(
@@ -878,6 +888,7 @@ mod tests {
                 backlight: false,
                 easy_switch: false,
                 virtual_thumbwheel: false,
+                onboard_buttons: false,
             }
         );
         // No driving features → nothing offered.

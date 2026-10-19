@@ -57,8 +57,8 @@ use openlogi_core::single_instance::{self, InstanceError, Role};
 use openlogi_fixture::{DeviceProfile, FixtureError, ProfileDeviceSettings, ProfileSetting};
 use openlogi_hid::{
     BacklightChange, BacklightState, DeviceRoute, Dpi, DpiInfo, EasySwitchHosts, FnLockState,
-    LightCommand, PasskeyMethod, ReceiverSelector, ReportRate, ReportRateInfo, ScrollWheelMode,
-    SmartShiftStatus, WriteError,
+    LightCommand, OnboardAction, OnboardButtons, PasskeyMethod, ReceiverSelector, ReportRate,
+    ReportRateInfo, ScrollWheelMode, SmartShiftStatus, WriteError,
 };
 use openlogi_ipc::transport;
 use openlogi_ipc::{
@@ -995,6 +995,31 @@ impl Agent for MockAgent {
         }
         info!(%route, slot, "rename_easy_switch_host");
         Ok(stored.clone())
+    }
+    /// No scripted device binds its buttons in a `0x8100` onboard profile.
+    async fn read_onboard_buttons(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<OnboardButtons, WriteError> {
+        self.state.lock().await.settings_for(&route)?;
+        Err(WriteError::FeatureUnsupported {
+            feature_hex: 0x8100,
+        })
+    }
+
+    async fn set_onboard_button(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        button: u8,
+        _action: OnboardAction,
+    ) -> Result<OnboardButtons, WriteError> {
+        self.state.lock().await.settings_for(&route)?;
+        info!(%route, button, "set_onboard_button (unsupported in the mock)");
+        Err(WriteError::FeatureUnsupported {
+            feature_hex: 0x8100,
+        })
     }
     /// The mock reports no changes on its lights, so it has none to keep.
     async fn reload_saved_config(

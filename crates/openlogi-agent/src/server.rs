@@ -20,8 +20,8 @@ use openlogi_core::config::{ConfigFile, Lighting};
 use openlogi_core::device::DeviceInventory;
 use openlogi_hid::{
     BacklightChange, BacklightState, DeviceRoute, Dpi, DpiInfo, EasySwitchHosts, FnLockState,
-    HapticWaveform, HidppOperation, LightCommand, ReceiverSelector, ReportRate, ReportRateInfo,
-    ScrollWheelMode, SmartShiftStatus, WriteError,
+    HapticWaveform, HidppOperation, LightCommand, OnboardAction, OnboardButtons, ReceiverSelector,
+    ReportRate, ReportRateInfo, ScrollWheelMode, SmartShiftStatus, WriteError,
 };
 use openlogi_ipc::transport;
 use openlogi_ipc::{
@@ -365,6 +365,29 @@ impl Agent for AgentServer {
 
     async fn observe_lock_keys(self, _: Context, since: Generation) -> LockKeyObservation {
         self.observable.lock_keys().observe(since).await
+    }
+
+    async fn read_onboard_buttons(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<OnboardButtons, WriteError> {
+        self.shared
+            .device(&route)
+            .run(HidppOperation::ReadOnboardButtons, |c| async move {
+                openlogi_hid::get_onboard_buttons_on(&c).await
+            })
+            .await
+    }
+
+    async fn set_onboard_button(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        button: u8,
+        action: OnboardAction,
+    ) -> Result<OnboardButtons, WriteError> {
+        self.shared.set_onboard_button(&route, button, action).await
     }
 
     async fn next_pairing(self, _: Context) -> Option<PairingUpdate> {
