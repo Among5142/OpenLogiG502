@@ -32,8 +32,9 @@ mod smartshift;
 
 pub use backlight::{get_backlight, get_backlight_on, update_backlight, update_backlight_on};
 pub use diagnostics::{
-    FeatureEntry, FirmwareEntity, FirmwareEntityInfo, ReprogControlEntry, dump_features,
-    dump_firmware_entities, dump_reprog_controls, read_battery_raw,
+    DirectoryDump, FeatureEntry, FirmwareEntity, FirmwareEntityInfo, OnboardProfilesDump,
+    ReprogControlEntry, SectorDump, dump_features, dump_firmware_entities, dump_onboard_profiles,
+    dump_reprog_controls, read_battery_raw,
 };
 pub use dpi::{
     Dpi, DpiCapabilities, DpiInfo, get_dpi, get_dpi_info, get_dpi_info_on, set_dpi, set_dpi_on,

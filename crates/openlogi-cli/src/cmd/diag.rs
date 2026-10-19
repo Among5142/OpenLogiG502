@@ -17,6 +17,7 @@ pub mod dpi;
 pub mod features;
 pub mod lighting;
 pub mod pointer_speed;
+pub mod profiles;
 pub mod smartshift;
 pub mod wheel;
 
@@ -38,6 +39,8 @@ pub enum DiagCmd {
     Wheel(wheel::WheelArgs),
     /// Read 0x2205 pointer scaling → write a test value → read back → restore.
     PointerSpeed(pointer_speed::PointerSpeedArgs),
+    /// Dump a G-series mouse's HID++ 0x8100 onboard profiles (read-only).
+    Profiles(profiles::ProfilesArgs),
 }
 
 impl DiagCmd {
@@ -54,6 +57,7 @@ impl DiagCmd {
             Self::Lighting(args) => lighting::run(args).await,
             Self::Wheel(args) => wheel::run(args).await,
             Self::PointerSpeed(args) => pointer_speed::run(args).await,
+            Self::Profiles(args) => profiles::run(args).await,
         }
     }
 }

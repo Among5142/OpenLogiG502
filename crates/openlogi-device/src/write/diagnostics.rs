@@ -11,6 +11,13 @@ use hidpp::{
         DeviceEntityFirmwareInfo, DeviceEntityType, DeviceInformationFeature,
     },
     feature::feature_set::FeatureSetFeature,
+    feature::onboard_profiles::{
+        OnboardMode, OnboardProfilesFeature, OnboardProfilesInfo,
+        layout::{
+            self, DirectoryEntry, LayoutError, ProfileSector, ROM_SECTOR_BASE,
+            USER_DIRECTORY_SECTOR,
+        },
+    },
     feature::unified_battery::UnifiedBatteryFeature,
     protocol::v20::Hidpp20Error,
 };
@@ -139,6 +146,113 @@ pub async fn dump_reprog_controls(
             entries.push(control.into());
         }
         Ok(entries)
+    })
+    .await
+}
+
+/// Everything `openlogi diag profiles` reads from a `0x8100` profile store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnboardProfilesDump {
+    /// The store description.
+    pub info: OnboardProfilesInfo,
+    /// Whether onboard profiles or the host drive the buttons.
+    pub mode: OnboardMode,
+    /// Sector of the active profile, as reported.
+    pub current_sector: u16,
+    /// The user directory, or why it could not be used. `None` when the
+    /// store's layout is not one this build decodes, so nothing past
+    /// `getInfo` was read.
+    pub directory: Option<DirectoryDump>,
+    /// Every user profile the directory lists, then every ROM profile.
+    pub sectors: Vec<SectorDump>,
+}
+
+/// The user profile directory as read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectoryDump {
+    /// Whether the directory sector's CRC matched. Firmware falls back to its
+    /// ROM profiles when it does not.
+    pub crc_valid: bool,
+    /// The decoded entries.
+    pub entries: Result<Vec<DirectoryEntry>, LayoutError>,
+}
+
+/// One profile sector as read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectorDump {
+    /// The sector address.
+    pub sector: u16,
+    /// Whether this is a factory (ROM) profile rather than a user one.
+    pub rom: bool,
+    /// The directory's enabled flag; `None` for ROM sectors.
+    pub enabled: Option<bool>,
+    /// Whether the sector's CRC matched.
+    pub crc_valid: bool,
+    /// The decoded profile.
+    pub profile: Result<ProfileSector, LayoutError>,
+    /// The sector bytes exactly as read, for checking the decoder.
+    pub raw: Vec<u8>,
+}
+
+/// Read the `0x8100` onboard profile store of the device on `route`: the
+/// description, mode, active sector, user directory, and every user and ROM
+/// profile sector. Read-only — for `openlogi diag profiles`, so the
+/// reverse-engineered layout can be checked against real hardware.
+pub async fn dump_onboard_profiles(
+    backend: &dyn HidBackend,
+    route: &DeviceRoute,
+) -> Result<OnboardProfilesDump, WriteError> {
+    const FEATURE: u16 = <OnboardProfilesFeature as CreatableFeature>::ID;
+    let index = route.device_index();
+    with_route(backend, route, move |channel| async move {
+        let mut device = Device::new(Arc::clone(&channel), index)
+            .await
+            .map_err(|_| WriteError::DeviceUnreachable { index })?;
+        let feature = open_feature::<OnboardProfilesFeature>(&mut device).await?;
+        let fail = |e| classify_hidpp_error(e, HidppOperation::DumpFeatures, FEATURE);
+
+        let info = feature.get_info().await.map_err(fail)?;
+        let mode = feature.get_onboard_mode().await.map_err(fail)?;
+        let current_sector = feature.get_current_profile_sector().await.map_err(fail)?;
+        let mut dump = OnboardProfilesDump {
+            info,
+            mode,
+            current_sector,
+            directory: None,
+            sectors: Vec::new(),
+        };
+        if !info.layout_supported() {
+            return Ok(dump);
+        }
+
+        let read = |sector| feature.read_sector(sector, info.sector_size);
+        let raw_directory = read(USER_DIRECTORY_SECTOR).await.map_err(fail)?;
+        let directory = DirectoryDump {
+            crc_valid: layout::sector_crc_valid(&raw_directory),
+            entries: layout::decode_directory(&raw_directory),
+        };
+        let user_sectors: Vec<(u16, Option<bool>)> = match &directory.entries {
+            Ok(entries) if directory.crc_valid => entries
+                .iter()
+                .map(|entry| (entry.sector, Some(entry.enabled)))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let rom_sectors =
+            (1..=u16::from(info.rom_profile_count)).map(|n| (ROM_SECTOR_BASE + n, None));
+        for (sector, enabled) in user_sectors.into_iter().chain(rom_sectors) {
+            let raw = read(sector).await.map_err(fail)?;
+            dump.sectors.push(SectorDump {
+                sector,
+                rom: enabled.is_none(),
+                enabled,
+                crc_valid: layout::sector_crc_valid(&raw),
+                profile: ProfileSector::decode(&raw),
+                raw,
+            });
+        }
+        dump.directory = Some(directory);
+        Ok(dump)
     })
     .await
 }

@@ -27,7 +27,8 @@ use openlogi_device::inventory::{Enumerator, InventoryError};
 use openlogi_device::pairing::PairingReceiver;
 use openlogi_device::write::{
     self as device, Dpi, DpiInfo, FeatureEntry, FirmwareEntity, HapticWaveform, LightingMethod,
-    LitraModel, PointerScaling, ReprogControlEntry, ScrollResolution, ScrollWheelMode,
+    LitraModel, OnboardProfilesDump, PointerScaling, ReprogControlEntry, ScrollResolution,
+    ScrollWheelMode,
 };
 use openlogi_device::{DeviceIoGate, DeviceIoSignal, DeviceRoute};
 
@@ -256,6 +257,11 @@ pub async fn dump_reprog_controls(
     route: &DeviceRoute,
 ) -> Result<Vec<ReprogControlEntry>, WriteError> {
     device::dump_reprog_controls(&*native_backend(), route).await
+}
+
+/// Read the `0x8100` onboard profile store of the device `route` reaches.
+pub async fn dump_onboard_profiles(route: &DeviceRoute) -> Result<OnboardProfilesDump, WriteError> {
+    device::dump_onboard_profiles(&*native_backend(), route).await
 }
 
 /// Read the raw battery report of the device `route` reaches.
