@@ -159,9 +159,25 @@ impl HidKey {
         key_name(self.0).unwrap_or("?")
     }
 
-    /// Every named key, in usage order — the list a key picker offers.
+    /// Every named key, in usage order.
     pub fn all() -> impl Iterator<Item = Self> {
         KEY_NAMES.iter().map(|&(usage, _)| Self(usage))
+    }
+
+    /// The keys of a standard US 104-key keyboard, plus F13–F24, in usage
+    /// order — what a key picker offers. F13–F24 are on no common keyboard
+    /// but every OS accepts them, which makes them the usual spare keys to
+    /// bind a mouse button to and catch in another program. The rest of
+    /// [`Self::all`] (Non-US #, the International and Language keys, Power,
+    /// the media-era Execute/Help/Menu row) reach the computer but no US
+    /// keyboard has them, so they are named when read back, never offered.
+    pub fn standard() -> impl Iterator<Item = Self> {
+        Self::all().filter(|key| {
+            matches!(
+                key.0,
+                0x04..=0x31 | 0x33..=0x63 | 0x65 | 0x68..=0x73 | 0xe0..=0xe7
+            )
+        })
     }
 
     /// The key a display name names (case-insensitive, also accepting a few
@@ -538,6 +554,34 @@ mod tests {
         let named: U8Deserializer<Error> = 0x04_u8.into_deserializer();
         assert_eq!(HidKey::deserialize(named), Ok(HidKey(0x04)));
         let unnamed: U8Deserializer<Error> = 0x82_u8.into_deserializer();
-        assert!(HidKey::deserialize(unnamed).is_err());
+        HidKey::deserialize(unnamed).expect_err("an unnamed usage is refused");
+    }
+
+    #[test]
+    fn the_standard_keys_are_a_104_key_board_and_f13_to_f24() {
+        let names: Vec<&str> = HidKey::standard().map(HidKey::name).collect();
+        // Each key of a US 104-key board has one usage, modifiers included.
+        assert_eq!(names.len(), 104 + 12);
+        for kept in [
+            "A",
+            "0",
+            "Print Screen",
+            "Keypad Enter",
+            "Application",
+            "F13",
+            "F24",
+            "Right Win",
+        ] {
+            assert!(names.contains(&kept), "{kept} offered");
+        }
+        for dropped in [
+            "Non-US #",
+            "Non-US \\",
+            "International 1",
+            "Power",
+            "Keypad =",
+        ] {
+            assert!(!names.contains(&dropped), "{dropped} not offered");
+        }
     }
 }

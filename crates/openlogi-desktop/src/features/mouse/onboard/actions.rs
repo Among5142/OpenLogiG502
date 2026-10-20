@@ -113,10 +113,9 @@ pub(super) const ACTION_GROUPS: [(&str, &[OnboardAction]); 6] = [
     ),
     (
         "device.onboard_group_other",
-        &[
-            OnboardAction::Function(OnboardFunction::BatteryStatus),
-            OnboardAction::Disabled,
-        ],
+        // Battery Status is left out: on the G502 X it lights nothing. A
+        // profile that has it still shows it, by name.
+        &[OnboardAction::Disabled],
     ),
 ];
 
@@ -268,7 +267,7 @@ pub(super) fn picked_chord(modifiers: HidModifiers, key: Option<HidKey>) -> Opti
 
 fn open_key_dialog(window: &mut Window, cx: &mut App, key: DeviceKey, button: u8) {
     let number = u16::from(button) + 1;
-    let options: Vec<KeyOption> = HidKey::all().map(KeyOption).collect();
+    let options: Vec<KeyOption> = HidKey::standard().map(KeyOption).collect();
     let keys = cx
         .new(|cx| SelectState::new(SearchableVec::new(options), None, window, cx).searchable(true));
     let modifiers = Rc::new(Cell::new(HidModifiers::NONE));
@@ -388,16 +387,16 @@ mod tests {
     }
 
     #[test]
-    fn the_key_picker_offers_every_named_key() {
+    fn the_key_picker_offers_each_standard_key_once() {
         assert_eq!(
-            HidKey::all().count(),
-            HidKey::all()
+            HidKey::standard().count(),
+            HidKey::standard()
                 .collect::<std::collections::BTreeSet<_>>()
                 .len()
         );
-        assert!(HidKey::all().any(|key| key.name() == "Print Screen"));
-        assert!(HidKey::all().any(|key| key.name() == "Keypad 7"));
-        assert!(HidKey::all().any(|key| key.name() == "F24"));
+        assert!(HidKey::standard().any(|key| key.name() == "Print Screen"));
+        assert!(HidKey::standard().any(|key| key.name() == "Keypad 7"));
+        assert!(HidKey::standard().any(|key| key.name() == "F24"));
     }
 
     #[test]
@@ -409,6 +408,10 @@ mod tests {
         }
         assert!(seen.contains(&&OnboardAction::Disabled));
         assert!(seen.contains(&&OnboardAction::Function(OnboardFunction::ShiftDpi)));
+        assert!(
+            !seen.contains(&&OnboardAction::Function(OnboardFunction::BatteryStatus)),
+            "the G502 X has no lights to show the battery on"
+        );
     }
 
     #[test]

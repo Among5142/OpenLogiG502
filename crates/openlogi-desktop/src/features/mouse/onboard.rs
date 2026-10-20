@@ -139,7 +139,7 @@ impl OnboardModelView {
         let state_obs = AppState::repaint_on(cx, |event| {
             matches!(event, StateEvent::OnboardButtonsChanged(_))
         });
-        let options: Vec<KeyOption> = HidKey::all().map(KeyOption).collect();
+        let options: Vec<KeyOption> = HidKey::standard().map(KeyOption).collect();
         let keys = cx.new(|cx| {
             SelectState::new(SearchableVec::new(options), None, window, cx).searchable(true)
         });
