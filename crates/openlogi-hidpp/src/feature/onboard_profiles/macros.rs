@@ -12,10 +12,10 @@
 //! as libratbag reads it. Commands run straight across libratbag's 16-byte
 //! read chunks (it assumes they never do), and each macro ends `ff ff`.
 //!
-//! What is inferred: mouse-button down `41 hi lo` and up `42 hi lo` carry the
-//! button mask big-endian, the encoding a mouse-button binding uses
-//! (`80 01 hi lo`). libratbag names the opcodes but never parses their
-//! payload.
+//! Mouse-button down `41 hi lo` and up `42 hi lo` carry the button mask
+//! big-endian, the encoding a mouse-button binding uses (`80 01 hi lo`).
+//! libratbag names the opcodes but never parses their payload; a left-click
+//! macro written this way clicks on a G502 X LIGHTSPEED.
 
 use super::layout::{KeyModifiers, MouseButtons};
 
