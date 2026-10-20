@@ -74,8 +74,9 @@ impl AppState {
     /// read-back arrives as [`Self::apply_onboard_button_written`].
     ///
     /// No-op unless `key` is the active device, it reports onboard buttons
-    /// and is reachable, its last reading has `button` and shows another
-    /// binding there, and that reading is on the mouse's current connection.
+    /// and is reachable, its last reading has `button`, shows another binding
+    /// there and lets the button take `action` (the clicks keep theirs), and
+    /// that reading is on the mouse's current connection.
     pub fn set_onboard_button(
         &mut self,
         key: &DeviceKey,
@@ -186,12 +187,17 @@ impl AppState {
 }
 
 /// Whether binding `button` to `action` changes what the mouse's last
-/// reading shows. `false` for a button the reading does not have.
+/// reading shows and the button takes it — a click button only takes its
+/// factory click (see [`OnboardButton::accepts`]). `false` for a button the
+/// reading does not have.
+///
+/// [`OnboardButton::accepts`]: openlogi_core::hid::OnboardButton::accepts
 pub(crate) fn needs_write(buttons: &OnboardButtons, button: u8, action: &OnboardAction) -> bool {
     buttons
         .buttons
         .get(usize::from(button))
         .is_some_and(|entry| {
-            entry.binding != openlogi_core::hid::OnboardBinding::Action(action.clone())
+            entry.accepts(action)
+                && entry.binding != openlogi_core::hid::OnboardBinding::Action(action.clone())
         })
 }

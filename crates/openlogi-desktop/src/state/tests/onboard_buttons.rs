@@ -186,6 +186,26 @@ fn a_write_is_needed_only_for_a_change_to_a_button_the_mouse_has() {
     assert!(!needs_write(&buttons, 3, &VOLUME_UP), "no such button");
 }
 
+#[test]
+fn a_click_button_takes_only_its_factory_click() {
+    let left = OnboardMouseButton::Left;
+    let mut buttons = buttons();
+    buttons.buttons.insert(
+        0,
+        OnboardButton {
+            binding: action(OnboardAction::Disabled),
+            factory: Some(action(OnboardAction::Mouse(left))),
+        },
+    );
+    assert!(!needs_write(&buttons, 0, &VOLUME_UP), "the click is locked");
+    assert!(
+        needs_write(&buttons, 0, &OnboardAction::Mouse(left)),
+        "a lost click can be restored"
+    );
+    buttons.buttons[0].binding = action(OnboardAction::Mouse(left));
+    assert!(!needs_write(&buttons, 0, &OnboardAction::Mouse(left)));
+}
+
 #[gpui::test]
 fn a_mouse_without_onboard_buttons_is_never_asked(cx: &mut gpui::TestAppContext) {
     let (state, mut receiver) = mouse_state(false);

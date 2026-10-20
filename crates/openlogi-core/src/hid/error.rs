@@ -230,6 +230,16 @@ pub enum WriteError {
         /// The zero-based button written.
         button: u8,
     },
+    /// A binding for the mouse's left or right click other than its factory
+    /// click (see `OnboardButton::locked`): rebinding it could leave the
+    /// mouse unable to click.
+    ///
+    /// Nothing was written.
+    #[error("button {} is the mouse's click and keeps its factory action", u16::from(*button) + 1)]
+    OnboardButtonLocked {
+        /// The zero-based button asked for.
+        button: u8,
+    },
 }
 
 /// HID++ operation being performed when a device write/read failed.

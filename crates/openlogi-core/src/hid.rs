@@ -13,6 +13,7 @@ pub mod dpi;
 pub mod easy_switch;
 pub mod error;
 pub mod fn_lock;
+pub mod key_chord;
 pub mod light;
 pub mod onboard_buttons;
 pub mod pairing;
@@ -28,6 +29,7 @@ pub use dpi::{Dpi, DpiCapabilities, DpiInfo};
 pub use easy_switch::{EasySwitchHosts, EasySwitchSlot, HostConnection, HostOsInfo, HostOsKind};
 pub use error::{HidppFeatureErrorKind, HidppOperation, WriteError};
 pub use fn_lock::FnLockState;
+pub use key_chord::{HidKey, HidKeyChord, HidKeyChordParseError, HidModifiers, UnknownHidKey};
 pub use light::{LightCommand, commands_for_light_settings};
 pub use onboard_buttons::{
     OnboardAction, OnboardBinding, OnboardButton, OnboardButtons, OnboardFunction,

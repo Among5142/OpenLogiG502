@@ -12,10 +12,9 @@ use hidpp::feature::onboard_profiles::layout::{
     ProfileSector, ROM_SECTOR_BASE, UnknownBinding,
 };
 use hidpp::protocol::v20::Hidpp20Error;
-use openlogi_core::binding::{CommandModifier, KeyCombo};
 use openlogi_core::hid::{
-    OnboardAction, OnboardBinding, OnboardButton, OnboardButtons, OnboardFunction,
-    OnboardMouseButton,
+    HidKey, HidKeyChord, HidModifiers, OnboardAction, OnboardBinding, OnboardButton,
+    OnboardButtons, OnboardFunction, OnboardMouseButton,
 };
 use tracing::debug;
 
@@ -47,10 +46,10 @@ pub async fn get_onboard_buttons_on(shared: &SharedChannel) -> Result<OnboardBut
 /// Bind `button` (zero-based) of the active onboard profile of the mouse on
 /// `route` to `action`, and answer with the buttons the mouse reads back.
 ///
-/// `command` says what a key chord's Command modifier stands for on this
-/// computer; the mouse stores the physical key. Refused with
-/// [`WriteError::OnboardProfileNotWritable`] or
-/// [`WriteError::OnboardButtonUnsupported`] before anything is written; a
+/// Refused with [`WriteError::OnboardProfileNotWritable`],
+/// [`WriteError::OnboardButtonUnsupported`] or, for the mouse's click
+/// buttons (see [`OnboardButton::accepts`]),
+/// [`WriteError::OnboardButtonLocked`] before anything is written; a
 /// write the mouse does not keep fails with
 /// [`WriteError::OnboardBindingNotApplied`]. Nothing else in the profile
 /// changes.
@@ -59,12 +58,11 @@ pub async fn set_onboard_button(
     route: &DeviceRoute,
     button: u8,
     action: OnboardAction,
-    command: CommandModifier,
 ) -> Result<OnboardButtons, WriteError> {
     let index = route.device_index();
     with_route(backend, route, move |channel| async move {
         let feature = open(&channel, index).await?;
-        set_button(&feature, button, &action, command).await
+        set_button(&feature, button, &action).await
     })
     .await
 }
@@ -74,10 +72,9 @@ pub async fn set_onboard_button_on(
     shared: &SharedChannel,
     button: u8,
     action: &OnboardAction,
-    command: CommandModifier,
 ) -> Result<OnboardButtons, WriteError> {
     let feature = open(shared.channel(), shared.device_index()).await?;
-    set_button(&feature, button, action, command).await
+    set_button(&feature, button, action).await
 }
 
 async fn open(
@@ -94,12 +91,21 @@ pub(super) async fn set_button(
     feature: &OnboardProfilesFeature,
     button: u8,
     action: &OnboardAction,
-    command: CommandModifier,
 ) -> Result<OnboardButtons, WriteError> {
+    // The lock is judged against a fresh reading: it names the button by its
+    // factory binding, which only the mouse knows.
+    let before = read_buttons(feature, HidppOperation::WriteOnboardButton).await?;
+    let entry = before
+        .buttons
+        .get(usize::from(button))
+        .ok_or(WriteError::OnboardButtonUnsupported { button })?;
+    if !entry.accepts(action) {
+        return Err(WriteError::OnboardButtonLocked { button });
+    }
     let change = OnboardBindingChange {
         layer: BindingLayer::Primary,
         slot: usize::from(button),
-        binding: binding_to_device(action, command),
+        binding: binding_to_device(action),
     };
     let written = remap_on(feature, &[change])
         .await
@@ -191,10 +197,16 @@ pub(crate) fn binding_from_device(
             || raw(binding),
             |button| action(OnboardAction::Mouse(button)),
         ),
-        Ok(binding @ ButtonBinding::Key { modifiers, usage }) => {
-            KeyCombo::from_hid(modifiers.bits(), usage)
-                .map_or_else(|| raw(binding), |combo| action(OnboardAction::Key(combo)))
-        }
+        Ok(binding @ ButtonBinding::Key { modifiers, usage }) => HidKey::try_from(usage)
+            .map_or_else(
+                |_| raw(binding),
+                |key| {
+                    action(OnboardAction::Key(HidKeyChord {
+                        modifiers: HidModifiers::from_bits(modifiers.bits()),
+                        key,
+                    }))
+                },
+            ),
         Ok(binding @ ButtonBinding::Function { function, .. }) => match function {
             ButtonFunction::NoAction => action(OnboardAction::Disabled),
             other => onboard_function(other).map_or_else(
@@ -206,7 +218,7 @@ pub(crate) fn binding_from_device(
 }
 
 /// The bytes the mouse stores for `action`.
-pub(crate) fn binding_to_device(action: &OnboardAction, command: CommandModifier) -> ButtonBinding {
+pub(crate) fn binding_to_device(action: &OnboardAction) -> ButtonBinding {
     match action {
         OnboardAction::Disabled => ButtonBinding::NoAction,
         OnboardAction::Mouse(button) => ButtonBinding::Mouse(match button {
@@ -216,9 +228,9 @@ pub(crate) fn binding_to_device(action: &OnboardAction, command: CommandModifier
             OnboardMouseButton::Back => MouseButtons::BACK,
             OnboardMouseButton::Forward => MouseButtons::FORWARD,
         }),
-        OnboardAction::Key(combo) => ButtonBinding::Key {
-            modifiers: KeyModifiers::from_bits_retain(combo.hid_modifiers(command)),
-            usage: combo.key().code(),
+        OnboardAction::Key(chord) => ButtonBinding::Key {
+            modifiers: KeyModifiers::from_bits_retain(chord.modifiers.bits()),
+            usage: chord.key.usage(),
         },
         OnboardAction::Consumer(usage) => ButtonBinding::Consumer(*usage),
         OnboardAction::Function(function) => ButtonBinding::Function {

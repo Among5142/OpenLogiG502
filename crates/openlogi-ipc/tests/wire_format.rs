@@ -43,8 +43,8 @@ use openlogi_core::device::{
 use openlogi_core::hid::{
     BacklightChange, BacklightControls, BacklightMode, BacklightState, BacklightStatus, Click,
     DeviceRoute, Dpi, DpiCapabilities, DpiInfo, EasySwitchHosts, EasySwitchSlot, FnLockState,
-    HidppFeatureErrorKind, HidppOperation, HostConnection, HostOsInfo, HostOsKind, LightCommand,
-    OnboardAction, OnboardBinding, OnboardButton, OnboardButtons, OnboardFunction,
+    HidKeyChord, HidppFeatureErrorKind, HidppOperation, HostConnection, HostOsInfo, HostOsKind,
+    LightCommand, OnboardAction, OnboardBinding, OnboardButton, OnboardButtons, OnboardFunction,
     OnboardMouseButton, PasskeyMethod, ReceiverSelector, ReportRate, ReportRateInfo,
     ScrollReportingTarget, ScrollWheelMode, SmartShiftAutoDisengage, SmartShiftMode,
     SmartShiftStatus, SmartShiftThreshold, TunableTorque, WriteError,
@@ -1054,9 +1054,13 @@ fn onboard_buttons_and_errors() {
         &AgentRequest::SetOnboardButton {
             route,
             button: 9,
-            action: OnboardAction::Key("Ctrl+Shift+C".parse::<KeyCombo>().expect("valid chord")),
+            action: OnboardAction::Key(
+                "Ctrl+Shift+Insert"
+                    .parse::<HidKeyChord>()
+                    .expect("valid chord"),
+            ),
         },
-        "29010a4c4947485453504545440109020606",
+        "29010a4c4947485453504545440109020349",
     );
     assert_wire(
         &OnboardButtons {
@@ -1089,12 +1093,7 @@ fn onboard_buttons_and_errors() {
     assert_wire(&HidppOperation::ReadOnboardButtons, "17");
     assert_wire(&HidppOperation::WriteOnboardButton, "18");
     assert_wire(&WriteError::OnboardProfileNotWritable, "1a");
-    assert_wire(
-        &WriteError::OnboardButtonUnsupported { button: 11 },
-        "1b0b",
-    );
-    assert_wire(
-        &WriteError::OnboardBindingNotApplied { button: 9 },
-        "1c09",
-    );
+    assert_wire(&WriteError::OnboardButtonUnsupported { button: 11 }, "1b0b");
+    assert_wire(&WriteError::OnboardBindingNotApplied { button: 9 }, "1c09");
+    assert_wire(&WriteError::OnboardButtonLocked { button: 0 }, "1d00");
 }

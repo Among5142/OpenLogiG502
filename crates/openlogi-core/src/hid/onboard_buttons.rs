@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::binding::KeyCombo;
+use super::HidKeyChord;
 
 /// A standard mouse button an onboard binding can press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -69,9 +69,10 @@ pub enum OnboardAction {
     Disabled,
     /// Press a standard mouse button.
     Mouse(OnboardMouseButton),
-    /// Press a keyboard shortcut. Stored as raw HID, so Command is resolved
-    /// for the computer that writes it.
-    Key(KeyCombo),
+    /// Press a key, with modifiers held around it. The mouse sends the raw
+    /// HID report, so any keyboard-page key can be stored, a modifier on its
+    /// own included.
+    Key(HidKeyChord),
     /// Press a consumer-control (media) usage, HID page `0x0C`.
     Consumer(u16),
     /// A firmware function.
@@ -100,6 +101,30 @@ pub struct OnboardButton {
     pub factory: Option<OnboardBinding>,
 }
 
+impl OnboardButton {
+    /// Whether the button is the mouse's primary or secondary click — what
+    /// its factory profile binds to Left or Right Click. Rebinding one could
+    /// leave the mouse unable to click, so it only takes its factory action
+    /// (see [`Self::accepts`]).
+    #[must_use]
+    pub fn locked(&self) -> bool {
+        matches!(
+            self.factory,
+            Some(OnboardBinding::Action(OnboardAction::Mouse(
+                OnboardMouseButton::Left | OnboardMouseButton::Right
+            )))
+        )
+    }
+
+    /// Whether `action` may be written to this button: anything, unless the
+    /// button is [locked](Self::locked), which takes only its factory action
+    /// — so a profile that already lost its click can get it back.
+    #[must_use]
+    pub fn accepts(&self, action: &OnboardAction) -> bool {
+        !self.locked() || self.factory.as_ref() == Some(&OnboardBinding::Action(action.clone()))
+    }
+}
+
 /// The buttons of a mouse's active onboard profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OnboardButtons {
@@ -108,4 +133,50 @@ pub struct OnboardButtons {
     pub sector: u16,
     /// One entry per programmable button, in the mouse's slot order.
     pub buttons: Vec<OnboardButton>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn button(factory: Option<OnboardAction>) -> OnboardButton {
+        OnboardButton {
+            binding: OnboardBinding::Action(OnboardAction::Disabled),
+            factory: factory.map(OnboardBinding::Action),
+        }
+    }
+
+    #[test]
+    fn the_clicks_take_only_their_factory_action() {
+        let left = button(Some(OnboardAction::Mouse(OnboardMouseButton::Left)));
+        let right = button(Some(OnboardAction::Mouse(OnboardMouseButton::Right)));
+        for (click, own) in [
+            (&left, OnboardMouseButton::Left),
+            (&right, OnboardMouseButton::Right),
+        ] {
+            assert!(click.locked());
+            assert!(click.accepts(&OnboardAction::Mouse(own)));
+            assert!(!click.accepts(&OnboardAction::Disabled));
+            assert!(!click.accepts(&OnboardAction::Function(OnboardFunction::NextDpi)));
+        }
+        assert!(
+            !left.accepts(&OnboardAction::Mouse(OnboardMouseButton::Right)),
+            "swapping the clicks is a rebind too"
+        );
+    }
+
+    #[test]
+    fn every_other_button_takes_anything() {
+        for factory in [
+            Some(OnboardAction::Mouse(OnboardMouseButton::Middle)),
+            Some(OnboardAction::Mouse(OnboardMouseButton::Back)),
+            Some(OnboardAction::Function(OnboardFunction::ShiftDpi)),
+            None,
+        ] {
+            let other = button(factory);
+            assert!(!other.locked());
+            assert!(other.accepts(&OnboardAction::Disabled));
+            assert!(other.accepts(&OnboardAction::Mouse(OnboardMouseButton::Left)));
+        }
+    }
 }

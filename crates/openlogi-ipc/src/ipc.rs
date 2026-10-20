@@ -124,8 +124,9 @@ pub use succession::Identity;
 ///      `Capabilities::onboard_buttons`, `OnboardButtons` and its types,
 ///      `HidppOperation::{ReadOnboardButtons, WriteOnboardButton}` and
 ///      `WriteError::{OnboardProfileNotWritable, OnboardButtonUnsupported,
-///      OnboardBindingNotApplied}` appended — the buttons a G-series mouse
-///      binds in its HID++ `0x8100` onboard profile, and rebinding one.
+///      OnboardBindingNotApplied, OnboardButtonLocked}` appended — the
+///      buttons a G-series mouse binds in its HID++ `0x8100` onboard profile,
+///      and rebinding one; its click buttons keep their factory action.
 pub const PROTOCOL_VERSION: u32 = 37;
 
 /// Environment variable through which the agent hands a supervised helper the
@@ -843,8 +844,10 @@ pub trait Agent {
     /// on `route` to `action`, and answer with the buttons it reads back.
     /// The mouse stores the binding itself, so nothing is persisted or
     /// replayed, and every other byte of the profile is kept. Refused with
-    /// [`WriteError::OnboardProfileNotWritable`] or
-    /// [`WriteError::OnboardButtonUnsupported`] before anything is written;
+    /// [`WriteError::OnboardProfileNotWritable`],
+    /// [`WriteError::OnboardButtonUnsupported`] or, for the mouse's left and
+    /// right click, [`WriteError::OnboardButtonLocked`] before anything is
+    /// written;
     /// a binding the mouse does not keep fails with
     /// [`WriteError::OnboardBindingNotApplied`].
     async fn set_onboard_button(

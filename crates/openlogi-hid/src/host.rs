@@ -271,20 +271,13 @@ pub async fn get_onboard_buttons(route: &DeviceRoute) -> Result<OnboardButtons, 
 }
 
 /// Bind one button of the active onboard profile of the mouse `route`
-/// reaches, storing Command as this computer's primary modifier.
+/// reaches.
 pub async fn set_onboard_button(
     route: &DeviceRoute,
     button: u8,
     action: OnboardAction,
 ) -> Result<OnboardButtons, WriteError> {
-    device::set_onboard_button(
-        &*native_backend(),
-        route,
-        button,
-        action,
-        openlogi_core::binding::CommandModifier::for_this_host(),
-    )
-    .await
+    device::set_onboard_button(&*native_backend(), route, button, action).await
 }
 
 /// Change bindings in the active onboard profile of the mouse `route` reaches.

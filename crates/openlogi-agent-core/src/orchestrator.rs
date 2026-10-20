@@ -310,8 +310,7 @@ impl SharedHandles {
 
     /// Bind `button` of the active onboard profile of the mouse on `route` to
     /// `action` and answer with the buttons it reads back. Writes to one
-    /// mouse run one at a time, in request order. A key chord's Command
-    /// modifier is stored as this computer's primary modifier.
+    /// mouse run one at a time, in request order.
     pub async fn set_onboard_button(
         &self,
         route: &DeviceRoute,
@@ -324,13 +323,7 @@ impl SharedHandles {
                 HidppOperation::WriteOnboardButton,
                 ticket,
                 move |c| async move {
-                    openlogi_hid::set_onboard_button_on(
-                        &c,
-                        button,
-                        &action,
-                        openlogi_core::binding::CommandModifier::for_this_host(),
-                    )
-                    .await
+                    openlogi_hid::set_onboard_button_on(&c, button, &action).await
                 },
             )
             .await

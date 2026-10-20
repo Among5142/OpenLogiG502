@@ -323,16 +323,15 @@ mod buttons {
     use hidpp::feature::onboard_profiles::layout::{
         self, BindingLayer, ButtonBinding, KeyModifiers, MouseButtons, UnknownBinding,
     };
-    use openlogi_core::binding::{CommandModifier, KeyCombo};
     use openlogi_core::hid::{
-        OnboardAction, OnboardBinding, OnboardFunction, OnboardMouseButton, WriteError,
+        HidKeyChord, OnboardAction, OnboardBinding, OnboardFunction, OnboardMouseButton, WriteError,
     };
 
     use super::super::buttons::{binding_from_device, binding_to_device, read_buttons, set_button};
     use super::{Mouse, feature, stock_profile};
     use crate::write::HidppOperation;
 
-    fn combo(text: &str) -> KeyCombo {
+    fn chord(text: &str) -> HidKeyChord {
         text.parse().expect("valid chord")
     }
 
@@ -342,38 +341,41 @@ mod buttons {
             OnboardAction::Disabled,
             OnboardAction::Mouse(OnboardMouseButton::Left),
             OnboardAction::Mouse(OnboardMouseButton::Forward),
-            OnboardAction::Key(combo("Ctrl+Shift+C")),
-            OnboardAction::Key(combo("Super+L")),
+            OnboardAction::Key(chord("Ctrl+Shift+C")),
+            OnboardAction::Key(chord("Win+L")),
+            OnboardAction::Key(chord("Insert")),
+            OnboardAction::Key(chord("Keypad 7")),
+            OnboardAction::Key(chord("F24")),
+            OnboardAction::Key(chord("Left Shift")),
+            OnboardAction::Key(chord("Right Alt+Print Screen")),
             OnboardAction::Consumer(0x00e9),
             OnboardAction::Function(OnboardFunction::ShiftDpi),
             OnboardAction::Function(OnboardFunction::GShift),
             OnboardAction::Function(OnboardFunction::ScrollUp),
         ];
         for action in actions {
-            let bytes = binding_to_device(&action, CommandModifier::Control)
-                .encode()
-                .expect("encodable");
+            let bytes = binding_to_device(&action).encode().expect("encodable");
             let back = binding_from_device(ButtonBinding::decode(bytes));
             assert_eq!(back, OnboardBinding::Action(action.clone()), "{bytes:02x?}");
         }
     }
 
     #[test]
-    fn command_is_stored_as_this_hosts_primary_modifier() {
-        let copy = OnboardAction::Key(combo("Cmd+C"));
+    fn a_key_is_stored_as_its_raw_hid_bytes() {
         assert_eq!(
-            binding_to_device(&copy, CommandModifier::Control),
+            binding_to_device(&OnboardAction::Key(chord("Ctrl+Shift+Insert"))),
             ButtonBinding::Key {
-                modifiers: KeyModifiers::LEFT_CTRL,
-                usage: 0x06,
+                modifiers: KeyModifiers::LEFT_CTRL | KeyModifiers::LEFT_SHIFT,
+                usage: 0x49,
             }
         );
         assert_eq!(
-            binding_to_device(&copy, CommandModifier::Gui),
+            binding_to_device(&OnboardAction::Key(chord("Left Shift"))),
             ButtonBinding::Key {
-                modifiers: KeyModifiers::LEFT_GUI,
-                usage: 0x06,
-            }
+                modifiers: KeyModifiers::empty(),
+                usage: 0xe1,
+            },
+            "a lone modifier is its own key"
         );
     }
 
@@ -386,12 +388,12 @@ mod buttons {
             OnboardBinding::Action(OnboardAction::Disabled),
             "an erased slot does nothing"
         );
-        // Profile select, a chord of mouse buttons, and a key outside the
-        // shortcut vocabulary keep their bytes.
+        // Profile select, a chord of mouse buttons, and a usage the HID
+        // keyboard page leaves unnamed keep their bytes.
         for bytes in [
             [0x90, 0x0d, 0x00, 0x02],
             [0x80, 0x01, 0x00, 0x03],
-            [0x80, 0x02, 0x00, 0x46],
+            [0x80, 0x02, 0x00, 0xa5],
         ] {
             assert_eq!(decode(bytes), OnboardBinding::Unrecognized(bytes));
         }
@@ -438,18 +440,13 @@ mod buttons {
         let mouse = Arc::new(Mutex::new(state));
         let feature = feature(&mouse).await;
 
-        let buttons = set_button(
-            &feature,
-            9,
-            &OnboardAction::Key(combo("Ctrl+Shift+C")),
-            CommandModifier::Control,
-        )
-        .await
-        .unwrap();
+        let buttons = set_button(&feature, 9, &OnboardAction::Key(chord("Ctrl+Shift+C")))
+            .await
+            .unwrap();
 
         assert_eq!(
             buttons.buttons[9].binding,
-            OnboardBinding::Action(OnboardAction::Key(combo("Ctrl+Shift+C")))
+            OnboardBinding::Action(OnboardAction::Key(chord("Ctrl+Shift+C")))
         );
         assert_eq!(buttons.buttons[10].binding, OnboardBinding::Macro);
         let flash = &mouse.lock().unwrap().sectors[&0x0001];
@@ -467,7 +464,7 @@ mod buttons {
             ..Mouse::g502x()
         }));
         let rom = feature(&mouse).await;
-        let refused = set_button(&rom, 9, &OnboardAction::Disabled, CommandModifier::Control).await;
+        let refused = set_button(&rom, 9, &OnboardAction::Disabled).await;
         assert!(matches!(
             refused,
             Err(WriteError::OnboardProfileNotWritable)
@@ -475,16 +472,55 @@ mod buttons {
 
         let mouse = Arc::new(Mutex::new(Mouse::g502x()));
         let feature = feature(&mouse).await;
-        let past = set_button(
-            &feature,
-            11,
-            &OnboardAction::Disabled,
-            CommandModifier::Control,
-        )
-        .await;
+        let past = set_button(&feature, 11, &OnboardAction::Disabled).await;
         assert!(matches!(
             past,
             Err(WriteError::OnboardButtonUnsupported { button: 11 })
         ));
+    }
+
+    #[tokio::test]
+    async fn the_clicks_are_locked_to_their_factory_action() {
+        let mouse = Arc::new(Mutex::new(Mouse::g502x()));
+        let feature = feature(&mouse).await;
+        for (button, other) in [
+            (0, OnboardAction::Disabled),
+            (1, OnboardAction::Mouse(OnboardMouseButton::Left)),
+        ] {
+            assert!(matches!(
+                set_button(&feature, button, &other).await,
+                Err(WriteError::OnboardButtonLocked { button: refused }) if refused == button
+            ));
+        }
+        assert!(
+            mouse.lock().unwrap().committed.is_empty(),
+            "nothing was written"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lost_click_can_be_restored() {
+        let mut state = Mouse::g502x();
+        let mut active = stock_profile();
+        layout::set_binding(
+            &mut active,
+            BindingLayer::Primary,
+            0,
+            ButtonBinding::NoAction,
+        )
+        .unwrap();
+        layout::seal(&mut active);
+        state.sectors.insert(0x0001, active);
+        let mouse = Arc::new(Mutex::new(state));
+        let feature = feature(&mouse).await;
+
+        let buttons = set_button(&feature, 0, &OnboardAction::Mouse(OnboardMouseButton::Left))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            buttons.buttons[0].binding,
+            OnboardBinding::Action(OnboardAction::Mouse(OnboardMouseButton::Left))
+        );
     }
 }
