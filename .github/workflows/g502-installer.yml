@@ -1,0 +1,121 @@
+# Unofficial G502 X build: an unsigned Windows installer (MSI) of this fork,
+# published as a GitHub release.
+#
+# Push a tag named g502-vX.Y.Z (for example g502-v1.0.0) and this builds the
+# app, wraps it in packaging/windows/OpenLogi.wxs — the same installer the
+# official releases use, so it installs per user, adds a Start menu entry and
+# uninstalls from Settings > Apps — and attaches OpenLogi-G502-X.Y.Z.msi to a
+# release for the tag. Run it from the Actions tab instead to get the MSI as a
+# workflow artifact without a release.
+#
+# The tag prefix keeps it clear of the official v* release workflows.
+name: G502 installer
+
+on:
+  push:
+    tags: ["g502-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  msi:
+    name: Windows MSI (x86_64)
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      # Static CRT, as the official build: the exes must not need the VC++
+      # Redistributable on a clean machine.
+      RUSTFLAGS: -C target-feature=+crt-static
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: g502-windows-release
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          # The MSI needs a numeric x.y.z; a dispatch without a tag builds 0.0.0.
+          if ($env:GITHUB_REF_NAME -match '^g502-v(\d+\.\d+\.\d+)$') {
+            $version = $Matches[1]
+          } else {
+            $version = '0.0.0'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build
+        run: cargo build --release -p openlogi-desktop -p openlogi-overlay -p openlogi-agent -p openlogi --target x86_64-pc-windows-msvc
+
+      - name: Stage the executables
+        shell: pwsh
+        run: |
+          $release = 'target\x86_64-pc-windows-msvc\release'
+          New-Item -ItemType Directory -Force -Path stage\bin | Out-Null
+          Copy-Item "$release\openlogi-desktop.exe" stage\OpenLogi.exe
+          Copy-Item "$release\openlogi-overlay.exe" stage\openlogi-overlay.exe
+          Copy-Item "$release\openlogi-agent.exe" stage\openlogi-agent.exe
+          # In bin\: Windows names are case-insensitive, so the CLI beside the
+          # GUI would overwrite OpenLogi.exe.
+          Copy-Item "$release\openlogi.exe" stage\bin\openlogi.exe
+
+      - name: Install WiX
+        # The versions the official release pins.
+        run: |
+          dotnet tool install --global wix --version 6.0.2
+          wix extension add --global WixToolset.UI.wixext/6.0.2
+          wix extension add --global WixToolset.Util.wixext/6.0.2
+
+      - name: Build the MSI
+        shell: pwsh
+        run: |
+          $stage = (Resolve-Path stage).Path
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          wix build packaging\windows\OpenLogi.wxs `
+            -ext WixToolset.UI.wixext `
+            -ext WixToolset.Util.wixext `
+            -arch x64 `
+            -d Version=${{ steps.version.outputs.version }} `
+            -d ExeFile="$stage\OpenLogi.exe" `
+            -d AgentExeFile="$stage\openlogi-agent.exe" `
+            -d OverlayExeFile="$stage\openlogi-overlay.exe" `
+            -d CliExeFile="$stage\bin\openlogi.exe" `
+            -o "out\OpenLogi-G502-${{ steps.version.outputs.version }}.msi"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OpenLogi-G502-msi
+          path: out/*.msi
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/g502-v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = @"
+          Unofficial OpenLogi build with Logitech G502 X LIGHTSPEED support:
+          button remapping on the mouse's onboard profile, any keyboard key,
+          and macros you build or record. Settings live on the mouse, so they
+          work with the app closed.
+
+          Install: download the .msi below and run it. Windows SmartScreen may
+          warn because the installer is not code-signed; choose More info, then
+          Run anyway. Uninstall from Settings > Apps > Installed apps > OpenLogi.
+
+          Turn off Check for updates in OpenLogi's Settings: an official update
+          would replace this build and remove the G502 X features.
+          "@
+          gh release create $env:GITHUB_REF_NAME (Get-ChildItem out\*.msi).FullName `
+            --repo $env:GITHUB_REPOSITORY `
+            --title "OpenLogi G502 X $env:GITHUB_REF_NAME" `
+            --notes $notes
