@@ -111,6 +111,18 @@ pub enum OnboardWriteError {
     /// Reading the sector back did not return what was written.
     #[error("sector 0x{0:04x} read back differently from what was written")]
     VerifyFailed(u16),
+    /// A macro has more commands than a sector holds.
+    #[error("the macro needs {needed} bytes but a sector holds {capacity}")]
+    MacroTooLong {
+        /// Bytes the macro needs.
+        needed: u16,
+        /// Bytes a sector has for it.
+        capacity: u16,
+    },
+    /// Every sector past the profiles is bound or holds data that is not a
+    /// macro.
+    #[error("no sector is free for another macro")]
+    MacroNoRoom,
 }
 
 /// The checks every write shares, done once the feature is open: a layout
@@ -279,6 +291,7 @@ async fn restore_on(
 }
 
 mod buttons;
+mod macros;
 
 pub use buttons::{
     get_onboard_buttons, get_onboard_buttons_on, set_onboard_button, set_onboard_button_on,

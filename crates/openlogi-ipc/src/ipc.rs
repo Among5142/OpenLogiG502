@@ -127,6 +127,9 @@ pub use succession::Identity;
 ///      OnboardBindingNotApplied, OnboardButtonLocked}` appended — the
 ///      buttons a G-series mouse binds in its HID++ `0x8100` onboard profile,
 ///      and rebinding one; its click buttons keep their factory action.
+///      `OnboardAction::Macro`, `OnboardMacro`, `MacroStep`, `MacroInput` and
+///      `WriteError::{OnboardMacroTooLong, OnboardMacroNoRoom}` appended — a
+///      macro the mouse stores and runs itself.
 pub const PROTOCOL_VERSION: u32 = 37;
 
 /// Environment variable through which the agent hands a supervised helper the

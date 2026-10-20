@@ -105,7 +105,13 @@ impl Mouse {
             0x5 => {
                 let sector = u16::from_be_bytes([args[0], args[1]]);
                 let offset = usize::from(u16::from_be_bytes([args[2], args[3]]));
-                let data = self.sectors.get(&sector)?;
+                // Sectors nothing wrote to read erased, as on the mouse.
+                let erased = vec![0xff; SECTOR_SIZE];
+                let data = match self.sectors.get(&sector) {
+                    Some(data) => data,
+                    None if sector < 16 => &erased,
+                    None => return None,
+                };
                 payload.copy_from_slice(&data[offset..offset + 16]);
             }
             0x6 => {
@@ -324,11 +330,12 @@ mod buttons {
         self, BindingLayer, ButtonBinding, KeyModifiers, MouseButtons, UnknownBinding,
     };
     use openlogi_core::hid::{
-        HidKeyChord, OnboardAction, OnboardBinding, OnboardFunction, OnboardMouseButton, WriteError,
+        HidKeyChord, MacroInput, MacroStep, OnboardAction, OnboardBinding, OnboardFunction,
+        OnboardMacro, OnboardMouseButton, WriteError,
     };
 
     use super::super::buttons::{binding_from_device, binding_to_device, read_buttons, set_button};
-    use super::{Mouse, feature, stock_profile};
+    use super::{Mouse, SECTOR_SIZE, feature, stock_profile};
     use crate::write::HidppOperation;
 
     fn chord(text: &str) -> HidKeyChord {
@@ -354,7 +361,10 @@ mod buttons {
             OnboardAction::Function(OnboardFunction::ScrollUp),
         ];
         for action in actions {
-            let bytes = binding_to_device(&action).encode().expect("encodable");
+            let bytes = binding_to_device(&action)
+                .expect("not a macro")
+                .encode()
+                .expect("encodable");
             let back = binding_from_device(ButtonBinding::decode(bytes));
             assert_eq!(back, OnboardBinding::Action(action.clone()), "{bytes:02x?}");
         }
@@ -363,14 +373,15 @@ mod buttons {
     #[test]
     fn a_key_is_stored_as_its_raw_hid_bytes() {
         assert_eq!(
-            binding_to_device(&OnboardAction::Key(chord("Ctrl+Shift+Insert"))),
+            binding_to_device(&OnboardAction::Key(chord("Ctrl+Shift+Insert")))
+                .expect("not a macro"),
             ButtonBinding::Key {
                 modifiers: KeyModifiers::LEFT_CTRL | KeyModifiers::LEFT_SHIFT,
                 usage: 0x49,
             }
         );
         assert_eq!(
-            binding_to_device(&OnboardAction::Key(chord("Left Shift"))),
+            binding_to_device(&OnboardAction::Key(chord("Left Shift"))).expect("not a macro"),
             ButtonBinding::Key {
                 modifiers: KeyModifiers::empty(),
                 usage: 0xe1,
@@ -437,6 +448,10 @@ mod buttons {
         .unwrap();
         layout::seal(&mut active);
         state.sectors.insert(0x0001, active);
+        // A macro that jumps, which the app does not read.
+        let mut jumping = vec![0xff; SECTOR_SIZE];
+        jumping[0x26..0x29].copy_from_slice(&[0x60, 0x00, 0x07]);
+        state.sectors.insert(0x0006, super::sealed(jumping));
         let mouse = Arc::new(Mutex::new(state));
         let feature = feature(&mouse).await;
 
@@ -522,5 +537,165 @@ mod buttons {
             buttons.buttons[0].binding,
             OnboardBinding::Action(OnboardAction::Mouse(OnboardMouseButton::Left))
         );
+    }
+
+    fn stroke(input: MacroInput, hold_ms: u16) -> MacroStep {
+        MacroStep::Stroke { input, hold_ms }
+    }
+
+    fn ctrl_c_then_click() -> OnboardMacro {
+        OnboardMacro {
+            steps: vec![
+                stroke(MacroInput::Key(chord("Ctrl+C")), 30),
+                MacroStep::Delay(120),
+                stroke(MacroInput::Mouse(OnboardMouseButton::Left), 15),
+            ],
+        }
+    }
+
+    /// The active profile with G4 running the macro in `sector`.
+    fn binding_macro_in(sector: u16) -> Vec<u8> {
+        let mut active = stock_profile();
+        layout::set_binding(
+            &mut active,
+            BindingLayer::Primary,
+            3,
+            ButtonBinding::Macro {
+                behavior: layout::MacroBehavior::Execute,
+                sector,
+                address: 0,
+            },
+        )
+        .unwrap();
+        super::sealed(active)
+    }
+
+    #[tokio::test]
+    async fn a_macro_goes_into_an_erased_sector_before_the_button_points_at_it() {
+        let mouse = Arc::new(Mutex::new(Mouse::g502x()));
+        let feature = feature(&mouse).await;
+        let program = OnboardAction::Macro(ctrl_c_then_click());
+
+        let buttons = set_button(&feature, 9, &program).await.unwrap();
+
+        assert_eq!(buttons.buttons[9].binding, OnboardBinding::Action(program));
+        let mouse = mouse.lock().unwrap();
+        assert_eq!(
+            mouse.committed,
+            [0x0006, 0x0001],
+            "macro first, then the binding"
+        );
+        let flash = &mouse.sectors[&0x0006];
+        assert!(layout::sector_crc_valid(flash));
+        assert_eq!(
+            &flash[..10],
+            &[0x43, 0x01, 0x06, 0x40, 0x00, 30, 0x44, 0x01, 0x06, 0x40]
+        );
+        assert_eq!(
+            &mouse.sectors[&0x0001][0x44..0x48],
+            &[0x00, 0x06, 0x00, 0x00]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sector_another_profile_binds_is_left_alone() {
+        let mut state = Mouse::g502x();
+        let held = macros_sector(&ctrl_c_then_click());
+        state.sectors.insert(0x0002, binding_macro_in(6));
+        state.sectors.insert(0x0006, held.clone());
+        let mouse = Arc::new(Mutex::new(state));
+        let feature = feature(&mouse).await;
+
+        set_button(&feature, 9, &OnboardAction::Macro(ctrl_c_then_click()))
+            .await
+            .unwrap();
+
+        let mouse = mouse.lock().unwrap();
+        assert_eq!(mouse.committed, [0x0007, 0x0001]);
+        assert_eq!(mouse.sectors[&0x0006], held, "profile 2's macro survives");
+    }
+
+    #[tokio::test]
+    async fn an_unbound_macro_is_reused_and_other_data_never_is() {
+        let mut state = Mouse::g502x();
+        // Sectors 6–14 hold something that is not a macro; 15 holds a macro
+        // nothing binds any more.
+        for sector in 6..15 {
+            state
+                .sectors
+                .insert(sector, super::sealed(vec![0x00; SECTOR_SIZE]));
+        }
+        state
+            .sectors
+            .insert(15, macros_sector(&ctrl_c_then_click()));
+        let mouse = Arc::new(Mutex::new(state));
+        let feature = feature(&mouse).await;
+        let program = OnboardMacro {
+            steps: vec![MacroStep::Delay(5)],
+        };
+
+        set_button(&feature, 9, &OnboardAction::Macro(program))
+            .await
+            .unwrap();
+
+        assert_eq!(mouse.lock().unwrap().committed, [0x000f, 0x0001]);
+    }
+
+    #[tokio::test]
+    async fn no_free_sector_or_too_long_a_macro_writes_nothing() {
+        let mut state = Mouse::g502x();
+        for sector in 6..16 {
+            state
+                .sectors
+                .insert(sector, super::sealed(vec![0x00; SECTOR_SIZE]));
+        }
+        let mouse = Arc::new(Mutex::new(state));
+        let feature = feature(&mouse).await;
+        assert!(matches!(
+            set_button(&feature, 9, &OnboardAction::Macro(ctrl_c_then_click())).await,
+            Err(WriteError::OnboardMacroNoRoom)
+        ));
+
+        let long = OnboardMacro {
+            steps: vec![stroke(MacroInput::Key(chord("A")), 1); 30],
+        };
+        assert!(matches!(
+            set_button(&feature, 9, &OnboardAction::Macro(long)).await,
+            Err(WriteError::OnboardMacroTooLong {
+                needed: 272,
+                capacity: 253
+            })
+        ));
+        assert!(mouse.lock().unwrap().committed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_bound_macro_reads_back_as_its_steps() {
+        let mut state = Mouse::g502x();
+        state.sectors.insert(0x0001, binding_macro_in(9));
+        state
+            .sectors
+            .insert(0x0009, macros_sector(&ctrl_c_then_click()));
+        let mouse = Arc::new(Mutex::new(state));
+        let feature = feature(&mouse).await;
+
+        let buttons = read_buttons(&feature, HidppOperation::ReadOnboardButtons)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            buttons.buttons[3].binding,
+            OnboardBinding::Action(OnboardAction::Macro(ctrl_c_then_click()))
+        );
+    }
+
+    /// The sector the device layer writes for `program`.
+    fn macros_sector(program: &OnboardMacro) -> Vec<u8> {
+        let commands: Vec<_> = program
+            .events()
+            .into_iter()
+            .map(super::super::macros::event_to_device)
+            .collect();
+        hidpp::feature::onboard_profiles::macros::macro_sector(&commands, SECTOR_SIZE).unwrap()
     }
 }

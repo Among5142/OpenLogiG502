@@ -44,10 +44,11 @@ use openlogi_core::hid::{
     BacklightChange, BacklightControls, BacklightMode, BacklightState, BacklightStatus, Click,
     DeviceRoute, Dpi, DpiCapabilities, DpiInfo, EasySwitchHosts, EasySwitchSlot, FnLockState,
     HidKeyChord, HidppFeatureErrorKind, HidppOperation, HostConnection, HostOsInfo, HostOsKind,
-    LightCommand, OnboardAction, OnboardBinding, OnboardButton, OnboardButtons, OnboardFunction,
-    OnboardMouseButton, PasskeyMethod, ReceiverSelector, ReportRate, ReportRateInfo,
-    ScrollReportingTarget, ScrollWheelMode, SmartShiftAutoDisengage, SmartShiftMode,
-    SmartShiftStatus, SmartShiftThreshold, TunableTorque, WriteError,
+    LightCommand, MacroInput, MacroStep, OnboardAction, OnboardBinding, OnboardButton,
+    OnboardButtons, OnboardFunction, OnboardMacro, OnboardMouseButton, PasskeyMethod,
+    ReceiverSelector, ReportRate, ReportRateInfo, ScrollReportingTarget, ScrollWheelMode,
+    SmartShiftAutoDisengage, SmartShiftMode, SmartShiftStatus, SmartShiftThreshold, TunableTorque,
+    WriteError,
 };
 use openlogi_ipc::{
     ActionRingCommandError, ActionRingInvocation, ActionRingPresentation, AgentRequest,
@@ -1096,4 +1097,36 @@ fn onboard_buttons_and_errors() {
     assert_wire(&WriteError::OnboardButtonUnsupported { button: 11 }, "1b0b");
     assert_wire(&WriteError::OnboardBindingNotApplied { button: 9 }, "1c09");
     assert_wire(&WriteError::OnboardButtonLocked { button: 0 }, "1d00");
+    assert_wire(
+        &WriteError::OnboardMacroTooLong {
+            needed: 272,
+            capacity: 253,
+        },
+        "1efb1001fbfd00",
+    );
+    assert_wire(&WriteError::OnboardMacroNoRoom, "1f");
+}
+
+#[test]
+fn onboard_macros() {
+    let ctrl_c: HidKeyChord = "Ctrl+C".parse().expect("valid chord");
+    let shift: HidKeyChord = "Left Shift".parse().expect("valid chord");
+    assert_wire(
+        &OnboardAction::Macro(OnboardMacro {
+            steps: vec![
+                MacroStep::Stroke {
+                    input: MacroInput::Key(ctrl_c),
+                    hold_ms: 30,
+                },
+                MacroStep::Delay(1000),
+                MacroStep::Press(MacroInput::Key(shift)),
+                MacroStep::Stroke {
+                    input: MacroInput::Mouse(OnboardMouseButton::Left),
+                    hold_ms: 15,
+                },
+                MacroStep::Release(MacroInput::Key(shift)),
+            ],
+        }),
+        "0505000001061e03fbe803010000e10001000f020000e1",
+    );
 }

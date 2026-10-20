@@ -240,6 +240,21 @@ pub enum WriteError {
         /// The zero-based button asked for.
         button: u8,
     },
+    /// The macro has more steps than a sector of the mouse's memory holds.
+    ///
+    /// Nothing was written.
+    #[error("the macro is too long for the mouse's memory ({needed} of {capacity} bytes)")]
+    OnboardMacroTooLong {
+        /// Bytes the macro needs.
+        needed: u16,
+        /// Bytes one macro may take.
+        capacity: u16,
+    },
+    /// Every sector the mouse has for macros holds one a profile still uses.
+    ///
+    /// Nothing was written.
+    #[error("the mouse has no free memory for another macro")]
+    OnboardMacroNoRoom,
 }
 
 /// HID++ operation being performed when a device write/read failed.

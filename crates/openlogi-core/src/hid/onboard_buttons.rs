@@ -77,6 +77,110 @@ pub enum OnboardAction {
     Consumer(u16),
     /// A firmware function.
     Function(OnboardFunction),
+    /// Run a macro the mouse stores itself.
+    Macro(OnboardMacro),
+}
+
+/// What a macro step presses: a key, with modifiers held around it, or a
+/// standard mouse button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MacroInput {
+    /// A key; a modifier on its own is the modifier's own key.
+    Key(HidKeyChord),
+    /// A mouse button.
+    Mouse(OnboardMouseButton),
+}
+
+/// One step of a macro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MacroStep {
+    /// Press an input, hold it `hold_ms` milliseconds, release it.
+    Stroke {
+        /// What is pressed.
+        input: MacroInput,
+        /// How long it is held, in milliseconds.
+        hold_ms: u16,
+    },
+    /// Press an input and keep it held — a recorded press another input
+    /// overlaps, released by a later [`Self::Release`].
+    Press(MacroInput),
+    /// Release a held input.
+    Release(MacroInput),
+    /// Wait, in milliseconds.
+    Delay(u16),
+}
+
+/// A macro: steps the mouse runs in order when the button is pressed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct OnboardMacro {
+    /// The steps, in order.
+    pub steps: Vec<MacroStep>,
+}
+
+/// One input going down or up, the unit a macro is stored and recorded in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MacroEvent {
+    /// The input goes down.
+    Press(MacroInput),
+    /// The input comes up.
+    Release(MacroInput),
+    /// Wait, in milliseconds.
+    Delay(u16),
+}
+
+impl OnboardMacro {
+    /// The macro from raw events — what the mouse stores, or what a
+    /// recording captured. A press, one wait and the release of the same
+    /// input fold into a [`MacroStep::Stroke`]; anything else stays a press,
+    /// a release or a wait.
+    #[must_use]
+    pub fn from_events(events: &[MacroEvent]) -> Self {
+        let mut steps = Vec::with_capacity(events.len());
+        let mut at = 0;
+        while let Some(event) = events.get(at) {
+            if let (
+                MacroEvent::Press(input),
+                Some(MacroEvent::Delay(hold_ms)),
+                Some(MacroEvent::Release(released)),
+            ) = (event, events.get(at + 1), events.get(at + 2))
+                && input == released
+            {
+                steps.push(MacroStep::Stroke {
+                    input: *input,
+                    hold_ms: *hold_ms,
+                });
+                at += 3;
+                continue;
+            }
+            steps.push(match *event {
+                MacroEvent::Press(input) => MacroStep::Press(input),
+                MacroEvent::Release(input) => MacroStep::Release(input),
+                MacroEvent::Delay(ms) => MacroStep::Delay(ms),
+            });
+            at += 1;
+        }
+        Self { steps }
+    }
+
+    /// The raw events the steps run as: a stroke is a press, a wait and a
+    /// release. The inverse of [`Self::from_events`].
+    #[must_use]
+    pub fn events(&self) -> Vec<MacroEvent> {
+        let mut events = Vec::with_capacity(self.steps.len() * 3);
+        for step in &self.steps {
+            match *step {
+                MacroStep::Stroke { input, hold_ms } => events.extend([
+                    MacroEvent::Press(input),
+                    MacroEvent::Delay(hold_ms),
+                    MacroEvent::Release(input),
+                ]),
+                MacroStep::Press(input) => events.push(MacroEvent::Press(input)),
+                MacroStep::Release(input) => events.push(MacroEvent::Release(input)),
+                MacroStep::Delay(ms) => events.push(MacroEvent::Delay(ms)),
+            }
+        }
+        events
+    }
 }
 
 /// What an onboard button is bound to, as read from the mouse.
@@ -84,8 +188,9 @@ pub enum OnboardAction {
 pub enum OnboardBinding {
     /// An action software can also write.
     Action(OnboardAction),
-    /// A macro another program (G HUB) stored on the mouse. It can be shown
-    /// and replaced, never written.
+    /// A macro stored on the mouse with commands this app does not read (a
+    /// jump, a repeat, a media key…). It can be shown and replaced, never
+    /// edited; a macro the app reads is an [`OnboardAction::Macro`].
     Macro,
     /// Bytes no decoder recognises, shown raw.
     Unrecognized([u8; 4]),
@@ -138,6 +243,51 @@ pub struct OnboardButtons {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn key(usage: u8) -> MacroInput {
+        MacroInput::Key(HidKeyChord::key(
+            super::super::HidKey::try_from(usage).expect("a named usage"),
+        ))
+    }
+
+    #[test]
+    fn a_press_wait_release_of_one_input_folds_into_a_stroke() {
+        let (three, space, x) = (key(0x20), key(0x2c), key(0x1b));
+        // G HUB's "tap 3, then Space+X": the 3 is a stroke, the overlapping
+        // Space and X stay presses and releases.
+        let events = [
+            MacroEvent::Press(three),
+            MacroEvent::Delay(70),
+            MacroEvent::Release(three),
+            MacroEvent::Delay(200),
+            MacroEvent::Press(space),
+            MacroEvent::Delay(65),
+            MacroEvent::Press(x),
+            MacroEvent::Delay(76),
+            MacroEvent::Release(space),
+            MacroEvent::Delay(55),
+            MacroEvent::Release(x),
+        ];
+        let folded = OnboardMacro::from_events(&events);
+        assert_eq!(
+            folded.steps,
+            [
+                MacroStep::Stroke {
+                    input: three,
+                    hold_ms: 70
+                },
+                MacroStep::Delay(200),
+                MacroStep::Press(space),
+                MacroStep::Delay(65),
+                MacroStep::Press(x),
+                MacroStep::Delay(76),
+                MacroStep::Release(space),
+                MacroStep::Delay(55),
+                MacroStep::Release(x),
+            ]
+        );
+        assert_eq!(folded.events(), events);
+    }
 
     fn button(factory: Option<OnboardAction>) -> OnboardButton {
         OnboardButton {

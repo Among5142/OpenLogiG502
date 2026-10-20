@@ -32,8 +32,8 @@ pub use fn_lock::FnLockState;
 pub use key_chord::{HidKey, HidKeyChord, HidKeyChordParseError, HidModifiers, UnknownHidKey};
 pub use light::{LightCommand, commands_for_light_settings};
 pub use onboard_buttons::{
-    OnboardAction, OnboardBinding, OnboardButton, OnboardButtons, OnboardFunction,
-    OnboardMouseButton,
+    MacroEvent, MacroInput, MacroStep, OnboardAction, OnboardBinding, OnboardButton,
+    OnboardButtons, OnboardFunction, OnboardMacro, OnboardMouseButton,
 };
 pub use pairing::{Click, PairingError, PasskeyMethod, ReceiverSelector};
 pub use report_rate::{ReportRate, ReportRateInfo};

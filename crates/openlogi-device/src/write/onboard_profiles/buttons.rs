@@ -2,23 +2,24 @@
 //! buttons as [`OnboardButtons`], and one button rebound to an
 //! [`OnboardAction`], answered with the read-back.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use hidpp::channel::HidppChannel;
 use hidpp::device::Device;
 use hidpp::feature::onboard_profiles::OnboardProfilesFeature;
 use hidpp::feature::onboard_profiles::layout::{
-    BINDING_SLOTS, BindingLayer, ButtonBinding, ButtonFunction, KeyModifiers, MouseButtons,
-    ProfileSector, ROM_SECTOR_BASE, UnknownBinding,
+    BINDING_SLOTS, BindingLayer, ButtonBinding, ButtonFunction, KeyModifiers, MacroBehavior,
+    MouseButtons, ProfileSector, ROM_SECTOR_BASE, UnknownBinding,
 };
 use hidpp::protocol::v20::Hidpp20Error;
 use openlogi_core::hid::{
     HidKey, HidKeyChord, HidModifiers, OnboardAction, OnboardBinding, OnboardButton,
-    OnboardButtons, OnboardFunction, OnboardMouseButton,
+    OnboardButtons, OnboardFunction, OnboardMacro, OnboardMouseButton,
 };
 use tracing::debug;
 
-use super::{FEATURE, OnboardBindingChange, OnboardWriteError, remap_on};
+use super::{FEATURE, OnboardBindingChange, OnboardWriteError, macros, remap_on};
 use crate::SharedChannel;
 use crate::backend::HidBackend;
 use crate::channel::route::DeviceRoute;
@@ -102,10 +103,22 @@ pub(super) async fn set_button(
     if !entry.accepts(action) {
         return Err(WriteError::OnboardButtonLocked { button });
     }
+    let binding = match binding_to_device(action) {
+        Ok(binding) => binding,
+        // The macro goes into a sector of its own first; the button only
+        // points at it once it reads back intact.
+        Err(program) => ButtonBinding::Macro {
+            behavior: MacroBehavior::Execute,
+            sector: macros::store_macro(feature, program)
+                .await
+                .map_err(|e| write_error(e, button))?,
+            address: 0,
+        },
+    };
     let change = OnboardBindingChange {
         layer: BindingLayer::Primary,
         slot: usize::from(button),
-        binding: binding_to_device(action),
+        binding,
     };
     let written = remap_on(feature, &[change])
         .await
@@ -125,6 +138,10 @@ fn write_error(error: OnboardWriteError, button: u8) -> WriteError {
         OnboardWriteError::Write(error) => error,
         OnboardWriteError::NoSuchButton { .. } => WriteError::OnboardButtonUnsupported { button },
         OnboardWriteError::VerifyFailed(_) => WriteError::OnboardBindingNotApplied { button },
+        OnboardWriteError::MacroTooLong { needed, capacity } => {
+            WriteError::OnboardMacroTooLong { needed, capacity }
+        }
+        OnboardWriteError::MacroNoRoom => WriteError::OnboardMacroNoRoom,
         OnboardWriteError::UnsupportedLayout { .. }
         | OnboardWriteError::DirectoryInvalid
         | OnboardWriteError::ActiveProfileNotWritable(_)
@@ -162,17 +179,29 @@ pub(super) async fn read_buttons(
         None
     };
     let count = usize::from(info.button_count).min(BINDING_SLOTS);
-    let buttons = (0..count)
-        .map(|slot| OnboardButton {
-            binding: binding_from_device(active.buttons[slot]),
+    let mut macro_sectors = HashMap::new();
+    let mut buttons = Vec::with_capacity(count);
+    for slot in 0..count {
+        let read = match active.buttons[slot] {
+            Ok(binding @ ButtonBinding::Macro { .. }) => {
+                macros::read_bound_macro(feature, binding, info.sector_size, &mut macro_sectors)
+                    .await
+                    .map_or(OnboardBinding::Macro, |program| {
+                        OnboardBinding::Action(OnboardAction::Macro(program))
+                    })
+            }
+            other => binding_from_device(other),
+        };
+        buttons.push(OnboardButton {
+            binding: read,
             factory: factory
                 .as_ref()
                 .and_then(|profile| match profile.buttons[slot] {
                     Ok(ButtonBinding::Unassigned) => None,
                     other => Some(binding_from_device(other)),
                 }),
-        })
-        .collect();
+        });
+    }
     Ok(OnboardButtons { sector, buttons })
 }
 
@@ -217,17 +246,12 @@ pub(crate) fn binding_from_device(
     }
 }
 
-/// The bytes the mouse stores for `action`.
-pub(crate) fn binding_to_device(action: &OnboardAction) -> ButtonBinding {
-    match action {
+/// The bytes the mouse stores for `action`, or, for a macro, the macro: it
+/// needs a sector of its own before a binding can point at it.
+pub(crate) fn binding_to_device(action: &OnboardAction) -> Result<ButtonBinding, &OnboardMacro> {
+    Ok(match action {
         OnboardAction::Disabled => ButtonBinding::NoAction,
-        OnboardAction::Mouse(button) => ButtonBinding::Mouse(match button {
-            OnboardMouseButton::Left => MouseButtons::LEFT,
-            OnboardMouseButton::Right => MouseButtons::RIGHT,
-            OnboardMouseButton::Middle => MouseButtons::MIDDLE,
-            OnboardMouseButton::Back => MouseButtons::BACK,
-            OnboardMouseButton::Forward => MouseButtons::FORWARD,
-        }),
+        OnboardAction::Mouse(button) => ButtonBinding::Mouse(device_mouse_button(*button)),
         OnboardAction::Key(chord) => ButtonBinding::Key {
             modifiers: KeyModifiers::from_bits_retain(chord.modifiers.bits()),
             usage: chord.key.usage(),
@@ -237,11 +261,23 @@ pub(crate) fn binding_to_device(action: &OnboardAction) -> ButtonBinding {
             function: device_function(*function),
             data: 0,
         },
+        OnboardAction::Macro(program) => return Err(program),
+    })
+}
+
+/// The mask a standard mouse button presses.
+pub(super) fn device_mouse_button(button: OnboardMouseButton) -> MouseButtons {
+    match button {
+        OnboardMouseButton::Left => MouseButtons::LEFT,
+        OnboardMouseButton::Right => MouseButtons::RIGHT,
+        OnboardMouseButton::Middle => MouseButtons::MIDDLE,
+        OnboardMouseButton::Back => MouseButtons::BACK,
+        OnboardMouseButton::Forward => MouseButtons::FORWARD,
     }
 }
 
 /// A single standard mouse button, or `None` for a chord or an extra button.
-fn mouse_button(buttons: MouseButtons) -> Option<OnboardMouseButton> {
+pub(super) fn mouse_button(buttons: MouseButtons) -> Option<OnboardMouseButton> {
     Some(match buttons {
         MouseButtons::LEFT => OnboardMouseButton::Left,
         MouseButtons::RIGHT => OnboardMouseButton::Right,

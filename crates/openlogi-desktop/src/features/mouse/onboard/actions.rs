@@ -141,6 +141,7 @@ pub(super) fn binding_label(binding: &OnboardBinding) -> SharedString {
 pub(super) fn action_label(action: &OnboardAction) -> SharedString {
     match action {
         OnboardAction::Disabled => tr!("device.onboard_disabled"),
+        OnboardAction::Macro(_) => tr!("device.onboard_macro_label"),
         OnboardAction::Mouse(button) => match button {
             OnboardMouseButton::Left => tr!("actions.left_click"),
             OnboardMouseButton::Right => tr!("actions.right_click"),
@@ -192,6 +193,7 @@ pub(super) fn binding_icon(binding: &OnboardBinding) -> &'static str {
         OnboardAction::Mouse(OnboardMouseButton::Back) => "action-icons/circle-arrow-left.svg",
         OnboardAction::Mouse(OnboardMouseButton::Forward) => "action-icons/circle-arrow-right.svg",
         OnboardAction::Key(_) => "action-icons/keyboard.svg",
+        OnboardAction::Macro(_) => "action-icons/list-checks.svg",
         OnboardAction::Consumer(usage) => match *usage {
             USAGE_PLAY_PAUSE => "action-icons/play.svg",
             USAGE_NEXT_TRACK => "action-icons/skip-forward.svg",
@@ -230,6 +232,10 @@ pub(super) fn refusal_text(refusal: &OnboardButtonRefusal) -> SharedString {
         WriteError::OnboardButtonLocked { .. } => {
             tr!("device.onboard_button_locked", button => button)
         }
+        WriteError::OnboardMacroTooLong { needed, capacity } => {
+            tr!("device.onboard_macro_too_long", needed => needed, capacity => capacity)
+        }
+        WriteError::OnboardMacroNoRoom => tr!("device.onboard_macro_no_room"),
         _ => tr!("device.onboard_binding_failed", button => button),
     }
 }
