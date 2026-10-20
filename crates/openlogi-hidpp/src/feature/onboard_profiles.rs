@@ -19,6 +19,7 @@ use openlogi_hidpp_derive::Feature;
 use crate::{feature::FeatureEndpoint, protocol::v20::Hidpp20Error};
 
 pub mod layout;
+pub mod macros;
 
 /// Bytes returned by one `memoryRead`.
 pub const MEMORY_READ_CHUNK: u16 = 16;
