@@ -20,6 +20,7 @@ use crate::features::camera::preview::CameraPreview;
 use crate::features::keyboard::function_row::FunctionRowView;
 use crate::features::lighting::keyboard_rgb::LightingPanel;
 use crate::features::lighting::standalone::LightPanel;
+use crate::features::mouse::onboard::OnboardModelView;
 use crate::features::mouse::view::MouseModelView;
 use crate::features::pointer::dpi::DpiPanel;
 use crate::features::pointer::smartshift::SmartShiftPanel;
@@ -199,6 +200,7 @@ pub struct AppView {
     focus_handle: FocusHandle,
     route: Route,
     mouse_model: Entity<MouseModelView>,
+    onboard_model: Entity<OnboardModelView>,
     action_ring_panel: Entity<ActionRingPanel>,
     keyboard_model: Entity<FunctionRowView>,
     dpi_panel: Entity<DpiPanel>,
@@ -281,6 +283,7 @@ impl AppView {
         }
 
         let mouse_model = cx.new(|cx| MouseModelView::new(window, cx));
+        let onboard_model = cx.new(OnboardModelView::new);
         let action_ring_panel = cx.new(ActionRingPanel::new);
         let keyboard_model = cx.new(FunctionRowView::new);
         let dpi_panel = cx.new(DpiPanel::new);
@@ -302,6 +305,7 @@ impl AppView {
             focus_handle,
             route: Route::Home,
             mouse_model,
+            onboard_model,
             action_ring_panel,
             keyboard_model,
             dpi_panel,
@@ -679,6 +683,7 @@ impl AppView {
                 detail::detail_content(
                     &detail::DetailPanels {
                         mouse_model: &self.mouse_model,
+                        onboard_model: &self.onboard_model,
                         action_ring: &self.action_ring_panel,
                         keyboard_model: &self.keyboard_model,
                         dpi_panel: &self.dpi_panel,

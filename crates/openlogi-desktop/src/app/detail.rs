@@ -28,6 +28,7 @@ use crate::features::keyboard::function_row::FunctionRowView;
 use crate::features::lighting::keyboard_rgb::LightingPanel;
 use crate::features::lighting::standalone::LightPanel;
 use crate::features::lighting::visual as light_visual;
+use crate::features::mouse::onboard::{OnboardDrawing, OnboardModelView, list as onboard_list};
 use crate::features::mouse::view::MouseModelView;
 use crate::features::pointer::dpi::DpiPanel;
 use crate::features::pointer::smartshift::SmartShiftPanel;
@@ -43,7 +44,6 @@ use crate::ui::theme::{
 
 mod backlight;
 mod easy_switch;
-mod onboard_buttons;
 
 const CAMERA_PREVIEW_W: Rems = rems(32.125);
 const CAMERA_CONTROLS_W: Rems = rems(31.25);
@@ -93,6 +93,7 @@ pub(super) fn detail_header(
 /// Long-lived child panels rendered by the device workspace.
 pub(super) struct DetailPanels<'a> {
     pub mouse_model: &'a gpui::Entity<MouseModelView>,
+    pub onboard_model: &'a gpui::Entity<OnboardModelView>,
     pub action_ring: &'a gpui::Entity<ActionRingPanel>,
     pub keyboard_model: &'a gpui::Entity<FunctionRowView>,
     pub dpi_panel: &'a gpui::Entity<DpiPanel>,
@@ -125,7 +126,9 @@ pub(super) fn detail_content(
         DetailTab::ActionsRing => {
             action_ring_tab(panels.action_ring, profile_icons, app_catalog, cx).into_any_element()
         }
-        DetailTab::OnboardButtons => onboard_buttons_tab(cx).into_any_element(),
+        DetailTab::OnboardButtons => {
+            onboard_buttons_tab(panels.onboard_model, cx).into_any_element()
+        }
         DetailTab::Keys => keys_tab(panels.keyboard_model).into_any_element(),
         DetailTab::Pointer => {
             pointer_tab(panels.dpi_panel, panels.smartshift_panel, cx).into_any_element()
@@ -284,19 +287,32 @@ fn tab_body(
 }
 
 /// Onboard Buttons tab: the buttons of a G-series mouse's active onboard
-/// profile.
-fn onboard_buttons_tab(cx: &mut Context<AppView>) -> impl IntoElement {
+/// profile — on a drawing of the mouse when the app has one that places them,
+/// otherwise as a list.
+fn onboard_buttons_tab(
+    onboard_model: &gpui::Entity<OnboardModelView>,
+    cx: &mut Context<AppView>,
+) -> gpui::AnyElement {
+    if OnboardDrawing::current(cx).is_some() {
+        return v_flex()
+            .flex_1()
+            .w_full()
+            .min_h_0()
+            .child(onboard_model.clone())
+            .into_any_element();
+    }
     let pal = theme::palette(cx);
     tab_body(
         ContentWidth::Small,
         v_flex()
             .w_full()
             .gap_3()
-            .children(onboard_buttons::onboard_buttons_card(
-                onboard_buttons::OnboardButtonsFacts::current(cx),
+            .children(onboard_list::onboard_buttons_card(
+                onboard_list::OnboardButtonsFacts::current(cx),
                 pal,
             )),
     )
+    .into_any_element()
 }
 
 /// Keys tab: the function-row remapper for a keyboard.
