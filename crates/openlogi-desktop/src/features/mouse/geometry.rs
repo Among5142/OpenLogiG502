@@ -5,7 +5,7 @@
 
 use openlogi_core::binding::ButtonId;
 
-use super::hotspots::{Hotspot, MOUSE_MODEL_SIZE, MouseControlId};
+use super::hotspots::{ControlTarget, Hotspot, MOUSE_MODEL_SIZE, MouseControlId, Navigation};
 use super::leader_lines::{Label, Side};
 use crate::services::assets::ResolvedAsset;
 
@@ -87,7 +87,11 @@ pub fn asset_has_button_labels(asset: &ResolvedAsset) -> bool {
     clippy::cast_precision_loss,
     reason = "device images are < 4096 px on either axis — well within f32 mantissa"
 )]
-pub fn asset_hotspots_for_png(asset: &ResolvedAsset, mouse_w: f32, mouse_h: f32) -> Vec<Hotspot> {
+pub(crate) fn asset_hotspots_for_png(
+    asset: &ResolvedAsset,
+    mouse_w: f32,
+    mouse_h: f32,
+) -> Vec<Hotspot> {
     let png_w = asset.png_width as f32;
     let origin_w = asset
         .metadata
@@ -134,16 +138,16 @@ pub fn asset_hotspots_for_png(asset: &ResolvedAsset, mouse_w: f32, mouse_h: f32)
     clippy::cast_precision_loss,
     reason = "hotspot count is bounded by ButtonId variants — well under f32 mantissa"
 )]
-pub fn labels_from_hotspots(
-    hotspots: &[Hotspot],
+pub(crate) fn labels_from_hotspots<I: ControlTarget>(
+    hotspots: &[Hotspot<I>],
     mouse_h: f32,
     distribution: LabelDistribution,
-) -> Vec<Label> {
+) -> Vec<Label<I>> {
     if hotspots.is_empty() {
         return Vec::new();
     }
 
-    let mut labels: Vec<Label> = hotspots
+    let mut labels: Vec<Label<I>> = hotspots
         .iter()
         .map(|hotspot| Label {
             id: hotspot.id,
@@ -172,10 +176,10 @@ pub fn labels_from_hotspots(
         vertical_order.sort_by(|&a, &b| hotspots[a].center().1.total_cmp(&hotspots[b].center().1));
         let back = vertical_order
             .iter()
-            .position(|&index| labels[index].id == ButtonId::Back.into());
+            .position(|&index| labels[index].id.navigation() == Some(Navigation::Back));
         let forward = vertical_order
             .iter()
-            .position(|&index| labels[index].id == ButtonId::Forward.into());
+            .position(|&index| labels[index].id.navigation() == Some(Navigation::Forward));
         let navigation_pair = if let (Some(back), Some(forward)) = (back, forward) {
             let first = back.min(forward);
             let second = back.max(forward);
@@ -203,7 +207,7 @@ pub fn labels_from_hotspots(
 }
 
 /// Label positions for the synthetic fallback silhouette.
-pub fn default_labels(thumbwheel: bool, distribution: LabelDistribution) -> Vec<Label> {
+pub(crate) fn default_labels(thumbwheel: bool, distribution: LabelDistribution) -> Vec<Label> {
     labels_from_hotspots(
         &super::hotspots::default_hotspots(thumbwheel),
         MOUSE_MODEL_SIZE.1,
@@ -328,7 +332,7 @@ mod tests {
 
     #[test]
     fn navigation_labels_stay_together_when_haptic_marker_sits_between() {
-        let hotspots = [
+        let hotspots: [Hotspot; 3] = [
             Hotspot {
                 id: ButtonId::Forward.into(),
                 x: 0.,

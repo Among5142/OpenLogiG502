@@ -46,20 +46,47 @@ impl MouseControlId {
     }
 }
 
+/// A target the diagram points at. Its hotspot, side label and leader line
+/// share it: [`MouseControlId`] for the Options+-style button view, the
+/// onboard view's own id for a mouse that binds its buttons in an onboard
+/// profile.
+pub(crate) trait ControlTarget: Copy + PartialEq + std::fmt::Debug {
+    /// Which navigation button this is, if either — the label layout keeps
+    /// Back and Forward next to each other.
+    fn navigation(self) -> Option<Navigation>;
+}
+
+/// The two navigation buttons, whose labels the layout keeps together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Navigation {
+    Back,
+    Forward,
+}
+
+impl ControlTarget for MouseControlId {
+    fn navigation(self) -> Option<Navigation> {
+        match self {
+            Self::Button(ButtonId::Back) => Some(Navigation::Back),
+            Self::Button(ButtonId::Forward) => Some(Navigation::Forward),
+            _ => None,
+        }
+    }
+}
+
 /// The size of the mouse model canvas. Hotspot coords are relative to this.
 pub const MOUSE_MODEL_SIZE: (f32, f32) = (420., 560.);
 
 /// Hotspot rectangle in mouse-model-local coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Hotspot {
-    pub(crate) id: MouseControlId,
+pub(crate) struct Hotspot<I = MouseControlId> {
+    pub(crate) id: I,
     pub x: f32,
     pub y: f32,
     pub w: f32,
     pub h: f32,
 }
 
-impl Hotspot {
+impl<I> Hotspot<I> {
     /// Returns the center point — convenient for leader lines.
     #[inline]
     #[must_use]
@@ -72,7 +99,7 @@ impl Hotspot {
 /// Primary L/R click are intentionally absent — Logi doesn't expose them
 /// as remappable and we follow the same rule everywhere.
 #[must_use]
-pub fn default_hotspots(thumbwheel: bool) -> Vec<Hotspot> {
+pub(crate) fn default_hotspots(thumbwheel: bool) -> Vec<Hotspot> {
     let mut hotspots = vec![
         Hotspot {
             id: ButtonId::MiddleClick.into(),

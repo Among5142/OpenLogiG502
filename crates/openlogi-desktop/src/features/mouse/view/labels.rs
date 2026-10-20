@@ -1,22 +1,18 @@
 //! The binding labels beside the mouse render: what each control card says and how it is placed in the side gutter.
 
+use std::rc::Rc;
+
+use super::super::controls::{BindingLabel, ControlCard, LABEL_W};
 use super::super::geometry::LABEL_H;
 use super::super::hotspots::MouseControlId;
 use super::super::leader_lines::{Label, Side};
 use super::super::thumbwheel::ThumbwheelPreset;
 use crate::features::binding_editor::{GESTURE_BUTTON_ICON, action_icon_path};
 use crate::ui::action::localized_action_label;
-use crate::ui::theme::{self, ACCENT_BLUE, Typography as _};
-use gpui::{
-    App, ElementId, Entity, Hsla, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    StatefulInteractiveElement as _, Styled, Window, div, prelude::FluentBuilder as _, px, rgb,
-    svg,
-};
-use gpui_base::Button as BaseButton;
-use gpui_component::{Icon, IconName, h_flex};
+use gpui::{Entity, InteractiveElement, ParentElement, Styled, div, px};
 use openlogi_core::binding::{Action, ButtonId, default_binding};
 
-use super::{LABEL_W, ModelRect, MouseModelView, SIDE_GAP, set_control_hovered};
+use super::{ModelRect, MouseModelView, SIDE_GAP, set_control_hovered};
 
 /// Position a selectable control card at the label's slot in the side gutter.
 /// Selection updates the fixed inspector; labels never own editor overlays.
@@ -33,15 +29,25 @@ pub(super) fn label_control(
         Side::Left => model.left - SIDE_GAP - LABEL_W,
         Side::Right => model.left + model.width + SIDE_GAP,
     };
-    let view = view.clone();
     let control = label.id;
-    let trigger = LabelTrigger {
+    let select_view = view.clone();
+    let hover_view = view.clone();
+    let trigger = ControlCard {
         id: ("label-trigger", idx).into(),
-        label,
+        name: tr!(control.translation_key()),
         binding,
         highlighted,
         selected,
-        view,
+        value_selector: format!("label-value-row-{control:?}"),
+        on_select: Rc::new(move |cx| {
+            select_view.update(cx, |this, cx| {
+                this.select(control);
+                cx.notify();
+            });
+        }),
+        on_hover: Rc::new(move |hovered, cx| {
+            set_control_hovered(&hover_view, control, hovered, cx);
+        }),
     };
     div()
         .absolute()
@@ -51,143 +57,6 @@ pub(super) fn label_control(
         .h(px(LABEL_H))
         .debug_selector(move || format!("label-card-{control:?}"))
         .child(trigger)
-}
-
-pub(super) struct BindingLabel {
-    text: gpui::SharedString,
-    /// Vendored action-icon asset path (see [`action_icon_path`]) for the
-    /// card's leading glyph. Every constructor currently supplies one; the
-    /// `Option` is the seam for icon-less bindings.
-    icon: Option<&'static str>,
-}
-
-impl BindingLabel {
-    /// The card's value row: the leading action icon, the binding text, and
-    /// the trailing chevron, all tinted with `color`.
-    fn row(self, color: Hsla, pal: theme::Palette) -> gpui::Div {
-        h_flex()
-            .items_center()
-            .gap_2()
-            // Leading action icon (same glyph as the picker rows), tinted with
-            // the value so it tracks the default / set / highlighted state.
-            .when_some(self.icon, |row, path| {
-                row.child(svg().path(path).size_4().flex_none().text_color(color))
-            })
-            .child(
-                // Shrink + ellipsis so a long action name (e.g. "Mission
-                // Control") doesn't push the chevron out of the fixed card.
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .text_body()
-                    .text_color(color)
-                    .child(self.text),
-            )
-            .child(
-                Icon::new(IconName::ChevronRight)
-                    .size_3()
-                    .text_color(pal.text_muted),
-            )
-    }
-}
-
-#[derive(IntoElement)]
-struct LabelTrigger {
-    id: ElementId,
-    label: Label,
-    binding: BindingLabel,
-    highlighted: bool,
-    selected: bool,
-    view: Entity<MouseModelView>,
-}
-
-impl RenderOnce for LabelTrigger {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let highlighted = self.highlighted || self.selected;
-        let selected = self.selected;
-        let btn = self.label.id;
-        let view = self.view;
-        let click_view = view.clone();
-        let pal = theme::palette(cx);
-        let binding_color = if highlighted {
-            rgb(ACCENT_BLUE).into()
-        } else {
-            pal.text_primary
-        };
-        // Always show the action the button actually performs. Default and
-        // customised bindings use the same neutral value colour; only the
-        // actively highlighted control takes the accent.
-        let binding_description = self.binding.text.clone();
-        let button_name = tr!(self.label.id.translation_key());
-        BaseButton::new(self.id)
-            .selected(selected)
-            .accessibility_label(tr!("actions.bind_control", name => button_name.clone()))
-            .aria_description(binding_description)
-            .aria_selected(selected)
-            .flex()
-            .flex_col()
-            .items_stretch()
-            .w(px(LABEL_W))
-            .h(px(LABEL_H))
-            .px_3()
-            .justify_center()
-            .gap_0p5()
-            .rounded(pal.control_radius)
-            .border_1()
-            .border_color(if highlighted {
-                rgb(ACCENT_BLUE).into()
-            } else {
-                pal.border
-            })
-            .bg(if highlighted {
-                theme::accent_tint()
-            } else {
-                pal.control
-            })
-            .cursor_pointer()
-            .hover(move |s| {
-                s.bg(if highlighted {
-                    theme::accent_tint_hover()
-                } else {
-                    pal.control_hover
-                })
-            })
-            .focus_visible(move |s| {
-                s.bg(if highlighted {
-                    theme::accent_tint_hover()
-                } else {
-                    pal.control_hover
-                })
-                .border_color(rgb(ACCENT_BLUE))
-            })
-            // Button name — the caption (xs / muted), the same size as the
-            // inspector title and category headers it shares the binding flow with.
-            .child(
-                div()
-                    .text_caption()
-                    .text_color(pal.text_muted)
-                    .child(button_name),
-            )
-            // Current binding — the value (sm), the same size as the action rows
-            // it edits.
-            .child(
-                self.binding
-                    .row(binding_color, pal)
-                    .debug_selector(move || format!("label-value-row-{btn:?}")),
-            )
-            .on_click(move |_event, _window, cx| {
-                click_view.update(cx, |this, cx| {
-                    this.select(btn);
-                    cx.notify();
-                });
-            })
-            .on_hover(move |hovered, _window, cx| {
-                set_control_hovered(&view, btn, *hovered, cx);
-            })
-    }
 }
 
 /// The label card's text and icon for one control.

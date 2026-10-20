@@ -6,7 +6,7 @@
 
 use gpui::{Bounds, PathBuilder, Pixels, Point, Window, hsla, point, px, rgb};
 
-use super::hotspots::{Hotspot, MouseControlId};
+use super::hotspots::{ControlTarget, Hotspot, MouseControlId};
 use crate::ui::theme::ACCENT_BLUE;
 
 /// Length of the horizontal stub before turning toward the label.
@@ -22,8 +22,8 @@ pub enum Side {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Label {
-    pub(crate) id: MouseControlId,
+pub(crate) struct Label<I = MouseControlId> {
+    pub(crate) id: I,
     pub side: Side,
     /// Y of the label anchor, in mouse-canvas coords (i.e. relative to the
     /// canvas's top-left, not the mouse silhouette's top-left).
@@ -47,12 +47,12 @@ pub struct Geometry {
 /// is canvas-local. Everything is converted to window-absolute before
 /// being handed to `PathBuilder` — `paint_path` expects absolute coords
 /// and there is no implicit canvas-to-window transform.
-pub fn paint(
+pub(crate) fn paint<I: ControlTarget>(
     canvas_bounds: Bounds<Pixels>,
     geometry: Geometry,
-    hotspots: &[Hotspot],
-    labels: &[Label],
-    highlighted: Option<MouseControlId>,
+    hotspots: &[Hotspot<I>],
+    labels: &[Label<I>],
+    highlighted: Option<I>,
     window: &mut Window,
 ) {
     for label in labels {
@@ -70,11 +70,11 @@ pub fn paint(
     }
 }
 
-fn paint_one(
+fn paint_one<I: ControlTarget>(
     canvas_screen_origin: Point<Pixels>,
     geometry: Geometry,
-    hotspot: Hotspot,
-    label: Label,
+    hotspot: Hotspot<I>,
+    label: Label<I>,
     highlight: bool,
     window: &mut Window,
 ) {

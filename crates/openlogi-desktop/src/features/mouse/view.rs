@@ -1,13 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, ElementId, Entity, FocusHandle, Focusable, Hsla,
-    InteractiveElement, IntoElement, ParentElement, Render, RenderOnce,
-    StatefulInteractiveElement as _, Styled, Subscription, Window, canvas, div, hsla, img,
-    prelude::FluentBuilder as _, px, rgb,
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Hsla,
+    InteractiveElement, IntoElement, ParentElement, Render, RenderOnce, Styled, Subscription,
+    Window, canvas, div, hsla, img, prelude::FluentBuilder as _, px,
 };
-use gpui_base::Button as BaseButton;
 use gpui_component::{
     h_flex,
     input::{InputEvent, InputState},
@@ -15,11 +14,12 @@ use gpui_component::{
 };
 use openlogi_core::binding::{Action, ButtonId, GestureDirection};
 
+use super::controls::{HotspotDot, LABEL_W};
 use super::geometry::{
     LabelDistribution, asset_dimensions_for_png, asset_has_button_labels, asset_hotspots_for_png,
     default_labels, labels_from_hotspots,
 };
-use super::hotspots::{Hotspot, MOUSE_MODEL_SIZE, MouseControlId, default_hotspots};
+use super::hotspots::{ControlTarget, Hotspot, MOUSE_MODEL_SIZE, MouseControlId, default_hotspots};
 use super::inspector::{
     ActionPickerContext, BindingInspectorData, ShortcutMode, binding_inspector,
 };
@@ -28,16 +28,14 @@ use crate::app::{glow_canvas, keyboard_glow};
 use crate::features::profiles::{friendly_app_name, profile_canvas_status};
 use crate::services::assets::{GlowGeometry, ResolvedAsset};
 use crate::state::{AppState, DeviceKey, DeviceRecord, StateEvent};
-use crate::ui::theme::{self, ACCENT_BLUE};
+use crate::ui::theme;
 
-const SIDE_GAP: f32 = 24.;
-const LABEL_W: f32 = 156.;
+pub(super) const SIDE_GAP: f32 = 24.;
 const LABEL_GUTTER: f32 = LABEL_W + SIDE_GAP;
 const TWO_SIDED_LABEL_MIN_W: f32 = 700.;
 
 const CARD_EDGE_INSET: f32 = SIDE_GAP;
 
-const HOTSPOT_DOT: f32 = 12.;
 /// Vertical space occupied by the device bar, profile context, and canvas
 /// padding. Normal operation no longer reserves a footer.
 const MODEL_VERTICAL_RESERVE: f32 = 154.;
@@ -423,7 +421,7 @@ impl Render for MouseModelView {
     }
 }
 
-fn workspace_layout(
+pub(super) fn workspace_layout(
     canvas: impl IntoElement,
     profile_status: Option<gpui::Div>,
     inspector: impl IntoElement,
@@ -468,6 +466,55 @@ struct ModelLayout {
     labels: Vec<Label>,
 }
 
+/// Where a model goes in the content area: the height it may take, the label
+/// gutters beside it, and the width left for the render.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct ModelFit {
+    pub(super) target_h: f32,
+    pub(super) max_image_w: f32,
+    pub(super) left_gutter: f32,
+    pub(super) right_gutter: f32,
+    pub(super) distribution: LabelDistribution,
+    /// Whether the window is wide enough for label cards at all.
+    pub(super) has_labels: bool,
+}
+
+impl ModelFit {
+    /// Fit a model to a `viewport_w` × `viewport_h` window. `wants_labels`
+    /// is whether the device has labelled controls; a narrow window drops
+    /// them either way.
+    pub(super) fn new(viewport_w: f32, viewport_h: f32, wants_labels: bool) -> Self {
+        let target_h = (viewport_h - MODEL_VERTICAL_RESERVE).clamp(MODEL_MIN_H, MOUSE_MODEL_SIZE.1);
+        let has_labels = wants_labels && viewport_w >= 960.;
+        let content_w =
+            (viewport_w - MODEL_HORIZONTAL_RESERVE).clamp(MODEL_MIN_CONTENT_W, MODEL_CONTENT_MAX_W);
+        let distribution = if has_labels && content_w >= TWO_SIDED_LABEL_MIN_W {
+            LabelDistribution::BothSides
+        } else {
+            LabelDistribution::LeftOnly
+        };
+        let left_gutter = if has_labels { LABEL_GUTTER } else { 0. };
+        let right_gutter = if distribution == LabelDistribution::BothSides {
+            LABEL_GUTTER
+        } else {
+            0.
+        };
+        Self {
+            target_h,
+            max_image_w: (content_w - left_gutter - right_gutter).max(MODEL_MIN_CONTENT_W / 2.),
+            left_gutter,
+            right_gutter,
+            distribution,
+            has_labels,
+        }
+    }
+
+    /// The factor that fits an authored [`MOUSE_MODEL_SIZE`] drawing.
+    pub(super) fn drawing_scale(self) -> f32 {
+        (self.target_h / MOUSE_MODEL_SIZE.1).min(self.max_image_w / MOUSE_MODEL_SIZE.0)
+    }
+}
+
 /// Scale the model to fit the content area in both axes. A tall mouse is bound
 /// by the viewport height; a wide keyboard is bound by the available width and
 /// drops the label gutter so it remains centred.
@@ -477,31 +524,19 @@ fn model_layout(
     viewport_h: f32,
     thumbwheel: bool,
 ) -> ModelLayout {
-    let target_h = (viewport_h - MODEL_VERTICAL_RESERVE).clamp(MODEL_MIN_H, MOUSE_MODEL_SIZE.1);
-    let has_labels = asset.is_none_or(asset_has_button_labels) && viewport_w >= 960.;
-    let content_w =
-        (viewport_w - MODEL_HORIZONTAL_RESERVE).clamp(MODEL_MIN_CONTENT_W, MODEL_CONTENT_MAX_W);
-    let label_distribution = if has_labels && content_w >= TWO_SIDED_LABEL_MIN_W {
-        LabelDistribution::BothSides
-    } else {
-        LabelDistribution::LeftOnly
-    };
-    let left_gutter = if has_labels { LABEL_GUTTER } else { 0. };
-    let right_gutter = if label_distribution == LabelDistribution::BothSides {
-        LABEL_GUTTER
-    } else {
-        0.
-    };
-    let max_image_w = (content_w - left_gutter - right_gutter).max(MODEL_MIN_CONTENT_W / 2.);
-    let (mouse_w, mouse_h, hotspots, mut labels) =
-        scaled_model(asset, target_h, max_image_w, thumbwheel, label_distribution);
-    if !has_labels {
+    let fit = ModelFit::new(
+        viewport_w,
+        viewport_h,
+        asset.is_none_or(asset_has_button_labels),
+    );
+    let (mouse_w, mouse_h, hotspots, mut labels) = scaled_model(asset, fit, thumbwheel);
+    if !fit.has_labels {
         labels.clear();
     }
 
     ModelLayout {
-        canvas_w: left_gutter + mouse_w + right_gutter,
-        mouse_left: left_gutter,
+        canvas_w: fit.left_gutter + mouse_w + fit.right_gutter,
+        mouse_left: fit.left_gutter,
         mouse_w,
         mouse_h,
         hotspots,
@@ -515,18 +550,17 @@ fn model_layout(
 /// `(mouse_w, mouse_h, hotspots, labels)`.
 fn scaled_model(
     asset: Option<&ResolvedAsset>,
-    target_h: f32,
-    max_w: f32,
+    fit: ModelFit,
     thumbwheel: bool,
-    label_distribution: LabelDistribution,
 ) -> (f32, f32, Vec<Hotspot>, Vec<Label>) {
+    let label_distribution = fit.distribution;
     if let Some(a) = asset {
-        let (w, h) = asset_dimensions_for_png(a, target_h, max_w);
+        let (w, h) = asset_dimensions_for_png(a, fit.target_h, fit.max_image_w);
         let hotspots = asset_hotspots_for_png(a, w, h);
         let labels = labels_from_hotspots(&hotspots, h, label_distribution);
         (w, h, hotspots, labels)
     } else {
-        let scale = (target_h / MOUSE_MODEL_SIZE.1).min(max_w / MOUSE_MODEL_SIZE.0);
+        let scale = fit.drawing_scale();
         let hotspots = default_hotspots(thumbwheel)
             .into_iter()
             .map(|hs| Hotspot {
@@ -553,10 +587,10 @@ fn scaled_model(
     }
 }
 
-fn leader_canvas(
-    hotspots: Vec<Hotspot>,
-    labels: Vec<Label>,
-    highlight: Option<MouseControlId>,
+pub(super) fn leader_canvas<I: ControlTarget + 'static>(
+    hotspots: Vec<Hotspot<I>>,
+    labels: Vec<Label<I>>,
+    highlight: Option<I>,
     mouse_left: f32,
     mouse_w: f32,
 ) -> impl IntoElement {
@@ -615,11 +649,13 @@ fn breathing_art(
         .child(device_art)
 }
 
+/// Where the render sits in the canvas: its left edge past the label
+/// gutter, and its size.
 #[derive(Clone, Copy)]
-struct ModelRect {
-    left: f32,
-    width: f32,
-    height: f32,
+pub(super) struct ModelRect {
+    pub(super) left: f32,
+    pub(super) width: f32,
+    pub(super) height: f32,
 }
 
 fn hotspots_layer(
@@ -712,86 +748,32 @@ fn hotspot_control(
     selected: bool,
     view: &Entity<MouseModelView>,
 ) -> gpui::Div {
-    let view = view.clone();
-    let trigger = HotspotTrigger {
-        id: ("hotspot-trigger", idx).into(),
-        hotspot,
-        hovered: hovered == Some(hotspot.id) || active == Some(hotspot.id),
-        view,
-        selected,
-    };
+    let control = hotspot.id;
+    let select_view = view.clone();
+    let hover_view = view.clone();
     div()
         .absolute()
         .left(px(hotspot.x))
         .top(px(hotspot.y))
         .w(px(hotspot.w))
         .h(px(hotspot.h))
-        .child(trigger)
-}
-
-#[derive(IntoElement)]
-struct HotspotTrigger {
-    id: ElementId,
-    hotspot: Hotspot,
-    hovered: bool,
-    view: Entity<MouseModelView>,
-    selected: bool,
-}
-
-impl RenderOnce for HotspotTrigger {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let highlighted = self.hovered || self.selected;
-        let selected = self.selected;
-        let view = self.view;
-        let click_view = view.clone();
-        let hotspot = self.hotspot;
-        let btn = hotspot.id;
-
-        BaseButton::new(self.id)
-            .selected(selected)
-            .accessibility_label(tr!(
-                "actions.bind_control",
-                name => tr!(btn.translation_key())
-            ))
-            .aria_selected(selected)
-            .flex()
-            .items_center()
-            .justify_center()
-            .w(px(hotspot.w))
-            .h(px(hotspot.h))
-            .child(
-                div()
-                    .w(px(HOTSPOT_DOT))
-                    .h(px(HOTSPOT_DOT))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(if highlighted {
-                        gpui::Hsla::from(rgb(ACCENT_BLUE))
-                    } else {
-                        hsla(0., 0., 0.95, 0.85)
-                    })
-                    .bg(if highlighted {
-                        gpui::Hsla::from(rgb(ACCENT_BLUE))
-                    } else {
-                        hsla(0., 0., 0.18, 0.85)
-                    }),
-            )
-            .focus_visible(|style| {
-                style
-                    .rounded_full()
-                    .border_2()
-                    .border_color(rgb(ACCENT_BLUE))
-            })
-            .on_click(move |_event, _window, cx| {
-                click_view.update(cx, |this, cx| {
-                    this.select(btn);
+        .child(HotspotDot {
+            id: ("hotspot-trigger", idx).into(),
+            name: tr!(control.translation_key()),
+            w: hotspot.w,
+            h: hotspot.h,
+            highlighted: hovered == Some(control) || active == Some(control),
+            selected,
+            on_select: Rc::new(move |cx| {
+                select_view.update(cx, |this, cx| {
+                    this.select(control);
                     cx.notify();
                 });
-            })
-            .on_hover(move |hovered, _window, cx| {
-                set_control_hovered(&view, btn, *hovered, cx);
-            })
-    }
+            }),
+            on_hover: Rc::new(move |hovered, cx| {
+                set_control_hovered(&hover_view, control, hovered, cx);
+            }),
+        })
 }
 
 #[cfg(test)]

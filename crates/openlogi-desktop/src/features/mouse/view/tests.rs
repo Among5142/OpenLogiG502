@@ -308,10 +308,22 @@ fn active_thumbwheel_directions_highlight_the_paired_control() {
     );
 }
 
+/// The old fixed box: a 560-tall, 420-wide model with labels on the left.
+fn fit_560x420() -> ModelFit {
+    ModelFit {
+        target_h: 560.,
+        max_image_w: 420.,
+        left_gutter: LABEL_W + SIDE_GAP,
+        right_gutter: 0.,
+        distribution: LabelDistribution::LeftOnly,
+        has_labels: true,
+    }
+}
+
 #[test]
 fn fallback_model_only_adds_thumbwheel_when_capability_is_measured() {
-    let (_, _, without, _) = scaled_model(None, 560., 420., false, LabelDistribution::LeftOnly);
-    let (_, _, with, _) = scaled_model(None, 560., 420., true, LabelDistribution::LeftOnly);
+    let (_, _, without, _) = scaled_model(None, fit_560x420(), false);
+    let (_, _, with, _) = scaled_model(None, fit_560x420(), true);
     assert_eq!(
         without
             .iter()

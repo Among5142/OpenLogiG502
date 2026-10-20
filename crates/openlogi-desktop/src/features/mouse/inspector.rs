@@ -94,6 +94,15 @@ pub(super) fn binding_inspector(
         Some(MouseControlId::Button(button)) => button_inspector(button, &data, picker, pal, cx),
     };
 
+    inspector_panel("button-inspector-scroll", body, pal)
+}
+
+/// The fixed panel beside the mouse diagram that `body` scrolls in.
+pub(super) fn inspector_panel(
+    scroll_id: &'static str,
+    body: impl IntoElement,
+    pal: Palette,
+) -> gpui::Div {
     v_flex()
         .w(px(INSPECTOR_W))
         .h_full()
@@ -104,7 +113,7 @@ pub(super) fn binding_inspector(
         .bg(pal.panel)
         .child(
             div()
-                .id("button-inspector-scroll")
+                .id(scroll_id)
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scrollbar()
@@ -633,7 +642,7 @@ fn thumbwheel_inspector(
         })
 }
 
-fn inspector_heading(
+pub(super) fn inspector_heading(
     title: gpui::SharedString,
     status: Option<gpui::SharedString>,
     pal: Palette,
