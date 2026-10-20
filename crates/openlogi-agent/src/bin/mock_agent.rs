@@ -75,6 +75,8 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tracing::{info, warn};
 
+#[path = "mock_agent/onboard.rs"]
+mod onboard;
 #[path = "mock_agent/profile.rs"]
 mod profile;
 
@@ -330,6 +332,8 @@ struct State {
     phase: Option<PairingPhase>,
     /// Id handed to the next pairing session; only ever increases.
     next_pairing_id: u64,
+    /// Onboard buttons of each mouse that reports them, from its first read.
+    onboard: Vec<(DeviceRoute, OnboardButtons)>,
     clock: MockClock,
 }
 
@@ -352,6 +356,7 @@ impl State {
             pairing_updates: None,
             phase: None,
             next_pairing_id: 0,
+            onboard: Vec::new(),
             clock,
         })
     }
@@ -538,6 +543,33 @@ impl State {
             .iter_mut()
             .find(|settings| settings.route == *route)
             .ok_or(WriteError::DeviceNotFound)
+    }
+
+    /// The onboard buttons of the mouse at `route`, the G502 X's factory
+    /// layout until something rebinds them. Only a scripted mouse whose
+    /// capabilities report onboard buttons has any.
+    fn onboard_for(&mut self, route: &DeviceRoute) -> Result<&mut OnboardButtons, WriteError> {
+        self.require_online(route)?;
+        let reports = self.profile.inventories.iter().any(|inventory| {
+            inventory.paired.iter().any(|device| {
+                DeviceRoute::for_slot(inventory, device.slot).as_ref() == Some(route)
+                    && device
+                        .capabilities
+                        .is_some_and(|capabilities| capabilities.onboard_buttons)
+            })
+        });
+        if !reports {
+            return Err(WriteError::FeatureUnsupported {
+                feature_hex: 0x8100,
+            });
+        }
+        let index = if let Some(index) = self.onboard.iter().position(|(known, _)| known == route) {
+            index
+        } else {
+            self.onboard.push((route.clone(), onboard::stock_g502x()));
+            self.onboard.len() - 1
+        };
+        Ok(&mut self.onboard[index].1)
     }
 
     fn require_online(&self, route: &DeviceRoute) -> Result<(), WriteError> {
@@ -996,16 +1028,13 @@ impl Agent for MockAgent {
         info!(%route, slot, "rename_easy_switch_host");
         Ok(stored.clone())
     }
-    /// No scripted device binds its buttons in a `0x8100` onboard profile.
+    /// A scripted mouse that reports onboard buttons has the G502 X's.
     async fn read_onboard_buttons(
         self,
         _: Context,
         route: DeviceRoute,
     ) -> Result<OnboardButtons, WriteError> {
-        self.state.lock().await.settings_for(&route)?;
-        Err(WriteError::FeatureUnsupported {
-            feature_hex: 0x8100,
-        })
+        Ok(self.state.lock().await.onboard_for(&route)?.clone())
     }
 
     async fn set_onboard_button(
@@ -1013,13 +1042,13 @@ impl Agent for MockAgent {
         _: Context,
         route: DeviceRoute,
         button: u8,
-        _action: OnboardAction,
+        action: OnboardAction,
     ) -> Result<OnboardButtons, WriteError> {
-        self.state.lock().await.settings_for(&route)?;
-        info!(%route, button, "set_onboard_button (unsupported in the mock)");
-        Err(WriteError::FeatureUnsupported {
-            feature_hex: 0x8100,
-        })
+        info!(%route, button, ?action, "set_onboard_button");
+        let mut state = self.state.lock().await;
+        let buttons = state.onboard_for(&route)?;
+        onboard::rebind(buttons, button, action)?;
+        Ok(buttons.clone())
     }
     /// The mock reports no changes on its lights, so it has none to keep.
     async fn reload_saved_config(
