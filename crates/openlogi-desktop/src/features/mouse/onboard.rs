@@ -16,17 +16,23 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, Subscription, Window, canvas, div, hsla, px,
+    App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, Styled as _, Subscription, Window, canvas, div, hsla,
+    px,
 };
 use gpui_component::{
     Disableable as _, IconName,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex,
+    h_flex,
+    searchable_list::SearchableVec,
+    select::{SelectEvent, SelectState},
+    v_flex,
 };
-use openlogi_core::hid::{OnboardButton, OnboardButtons};
+use openlogi_core::hid::{
+    HidKey, HidKeyChord, HidModifiers, OnboardAction, OnboardBinding, OnboardButton, OnboardButtons,
+};
 
-use self::actions::{binding_icon, binding_label};
+use self::actions::{KeyOption, binding_icon, binding_label, picked_chord};
 use self::inspector::onboard_inspector;
 use self::shape::{CapTone, OnboardTarget, Shape, ShapeColors, shape_for};
 use super::controls::{BindingLabel, ControlCard, HotspotDot, LABEL_W, OnHover, OnSelect};
@@ -100,22 +106,127 @@ pub struct OnboardModelView {
     device: Option<DeviceKey>,
     hovered: Option<OnboardTarget>,
     selected: Option<OnboardTarget>,
+    /// The button the picker was last set up for, so a new selection opens
+    /// on what that button does now.
+    picker_for: Option<OnboardTarget>,
+    picker: PickerState,
     _state_obs: Subscription,
+}
+
+/// What the inspector offers to bind a button to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PickMode {
+    /// Something the mouse runs itself: a click, DPI, a profile, media.
+    Actions,
+    /// A keyboard key, with modifiers held around it.
+    Key,
+}
+
+/// The inspector's picker: which kind of binding it shows, and the key being
+/// put together.
+struct PickerState {
+    mode: PickMode,
+    keys: Entity<SelectState<SearchableVec<KeyOption>>>,
+    modifiers: HidModifiers,
+    /// Set Key was pressed with no key chosen, so the caption says why
+    /// nothing happened.
+    key_missing: bool,
 }
 
 impl OnboardModelView {
     /// Create the onboard diagram.
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let state_obs = AppState::repaint_on(cx, |event| {
             matches!(event, StateEvent::OnboardButtonsChanged(_))
         });
+        let options: Vec<KeyOption> = HidKey::all().map(KeyOption).collect();
+        let keys = cx.new(|cx| {
+            SelectState::new(SearchableVec::new(options), None, window, cx).searchable(true)
+        });
+        cx.subscribe(&keys, |this, _, _: &SelectEvent<_>, cx| {
+            this.picker.key_missing = false;
+            cx.notify();
+        })
+        .detach();
         Self {
             focus_handle: cx.focus_handle(),
             device: None,
             hovered: None,
             selected: None,
+            picker_for: None,
+            picker: PickerState {
+                mode: PickMode::Actions,
+                keys,
+                modifiers: HidModifiers::NONE,
+                key_missing: false,
+            },
             _state_obs: state_obs,
         }
+    }
+
+    /// Open the picker on what `target`'s button does now: its key, when it
+    /// sends one, otherwise the action list.
+    fn set_up_picker(
+        &mut self,
+        target: OnboardTarget,
+        binding: &OnboardBinding,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.picker_for = Some(target);
+        self.picker.key_missing = false;
+        let chord = match binding {
+            OnboardBinding::Action(OnboardAction::Key(chord)) => Some(*chord),
+            _ => None,
+        };
+        self.picker.mode = if chord.is_some() {
+            PickMode::Key
+        } else {
+            PickMode::Actions
+        };
+        self.picker.modifiers = chord.map_or(HidModifiers::NONE, |chord| chord.modifiers);
+        self.picker.keys.update(cx, |keys, cx| match chord {
+            Some(chord) => keys.set_selected_value(&chord.key, window, cx),
+            None => keys.set_selected_index(None, window, cx),
+        });
+    }
+
+    /// Set the picker up for a button just selected.
+    fn follow_selection(
+        &mut self,
+        drawing: &OnboardDrawing,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(target) = self.selected
+            && self.picker_for != Some(target)
+            && let Some(button) = drawing.button(target)
+        {
+            let binding = button.binding.clone();
+            self.set_up_picker(target, &binding, window, cx);
+        }
+    }
+
+    fn set_pick_mode(&mut self, mode: PickMode) {
+        self.picker.mode = mode;
+    }
+
+    fn toggle_modifier(&mut self, modifier: HidModifiers) {
+        let current = self.picker.modifiers;
+        self.picker.modifiers = if current.contains(modifier) {
+            current.without(modifier)
+        } else {
+            current.with(modifier)
+        };
+    }
+
+    /// The chord the key picker makes, or `None` — noted for the caption —
+    /// until a key is chosen.
+    fn picked_chord(&mut self, cx: &App) -> Option<HidKeyChord> {
+        let key = self.picker.keys.read(cx).selected_value().copied();
+        let chord = picked_chord(self.picker.modifiers, key);
+        self.picker.key_missing = chord.is_none();
+        chord
     }
 
     fn reset_for_device(&mut self, device: &DeviceKey) {
@@ -125,6 +236,7 @@ impl OnboardModelView {
         self.device = Some(device.clone());
         self.hovered = None;
         self.selected = None;
+        self.picker_for = None;
     }
 }
 
@@ -166,6 +278,7 @@ impl Render for OnboardModelView {
             return div().into_any_element();
         };
         self.reset_for_device(&drawing.key);
+        self.follow_selection(&drawing, window, cx);
         let pal = theme::palette(cx);
         let view = cx.entity();
 
@@ -246,7 +359,15 @@ impl Render for OnboardModelView {
                     .children(dots),
             );
 
-        let inspector = onboard_inspector(&drawing, self.selected, pal);
+        let chosen_key = self.picker.keys.read(cx).selected_value().copied();
+        let inspector = onboard_inspector(
+            &drawing,
+            self.selected,
+            &self.picker,
+            chosen_key,
+            &view,
+            pal,
+        );
         workspace_layout(
             canvas_area,
             Some(profile_bar(&drawing, pal)),
@@ -398,7 +519,7 @@ fn profile_bar(drawing: &OnboardDrawing, pal: Palette) -> gpui::Div {
 
 #[cfg(test)]
 mod tests {
-    use openlogi_core::hid::{OnboardAction, OnboardBinding, OnboardMouseButton};
+    use openlogi_core::hid::OnboardMouseButton;
 
     use super::*;
 

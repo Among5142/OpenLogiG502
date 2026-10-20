@@ -41,7 +41,7 @@ pub(super) fn action_menu(
             })
         };
         let mut menu = menu;
-        for (i, group) in MENU_GROUPS.iter().enumerate() {
+        for (i, (_, group)) in ACTION_GROUPS.iter().enumerate() {
             if i > 0 {
                 menu = menu.item(PopupMenuItem::separator());
             }
@@ -58,47 +58,66 @@ pub(super) fn action_menu(
     }
 }
 
-/// The menu's action groups: mouse buttons, DPI, profiles, scrolling, media,
-/// then the rest.
-const MENU_GROUPS: [&[OnboardAction]; 6] = [
-    &[
-        OnboardAction::Mouse(OnboardMouseButton::Left),
-        OnboardAction::Mouse(OnboardMouseButton::Right),
-        OnboardAction::Mouse(OnboardMouseButton::Middle),
-        OnboardAction::Mouse(OnboardMouseButton::Back),
-        OnboardAction::Mouse(OnboardMouseButton::Forward),
-    ],
-    &[
-        OnboardAction::Function(OnboardFunction::NextDpi),
-        OnboardAction::Function(OnboardFunction::PreviousDpi),
-        OnboardAction::Function(OnboardFunction::CycleDpi),
-        OnboardAction::Function(OnboardFunction::DefaultDpi),
-        OnboardAction::Function(OnboardFunction::ShiftDpi),
-    ],
-    &[
-        OnboardAction::Function(OnboardFunction::NextProfile),
-        OnboardAction::Function(OnboardFunction::PreviousProfile),
-        OnboardAction::Function(OnboardFunction::CycleProfile),
-        OnboardAction::Function(OnboardFunction::GShift),
-    ],
-    &[
-        OnboardAction::Function(OnboardFunction::TiltLeft),
-        OnboardAction::Function(OnboardFunction::TiltRight),
-        OnboardAction::Function(OnboardFunction::ScrollUp),
-        OnboardAction::Function(OnboardFunction::ScrollDown),
-    ],
-    &[
-        OnboardAction::Consumer(USAGE_PLAY_PAUSE),
-        OnboardAction::Consumer(USAGE_NEXT_TRACK),
-        OnboardAction::Consumer(USAGE_PREVIOUS_TRACK),
-        OnboardAction::Consumer(USAGE_VOLUME_UP),
-        OnboardAction::Consumer(USAGE_VOLUME_DOWN),
-        OnboardAction::Consumer(USAGE_MUTE),
-    ],
-    &[
-        OnboardAction::Function(OnboardFunction::BatteryStatus),
-        OnboardAction::Disabled,
-    ],
+/// The actions the mouse runs itself, grouped under the locale key of each
+/// group's heading: mouse buttons, DPI, profiles, scrolling, media, then the
+/// rest.
+pub(super) const ACTION_GROUPS: [(&str, &[OnboardAction]); 6] = [
+    (
+        "device.mouse",
+        &[
+            OnboardAction::Mouse(OnboardMouseButton::Left),
+            OnboardAction::Mouse(OnboardMouseButton::Right),
+            OnboardAction::Mouse(OnboardMouseButton::Middle),
+            OnboardAction::Mouse(OnboardMouseButton::Back),
+            OnboardAction::Mouse(OnboardMouseButton::Forward),
+        ],
+    ),
+    (
+        "pointer.dpi",
+        &[
+            OnboardAction::Function(OnboardFunction::NextDpi),
+            OnboardAction::Function(OnboardFunction::PreviousDpi),
+            OnboardAction::Function(OnboardFunction::CycleDpi),
+            OnboardAction::Function(OnboardFunction::DefaultDpi),
+            OnboardAction::Function(OnboardFunction::ShiftDpi),
+        ],
+    ),
+    (
+        "device.onboard_group_profiles",
+        &[
+            OnboardAction::Function(OnboardFunction::NextProfile),
+            OnboardAction::Function(OnboardFunction::PreviousProfile),
+            OnboardAction::Function(OnboardFunction::CycleProfile),
+            OnboardAction::Function(OnboardFunction::GShift),
+        ],
+    ),
+    (
+        "pointer.scroll",
+        &[
+            OnboardAction::Function(OnboardFunction::TiltLeft),
+            OnboardAction::Function(OnboardFunction::TiltRight),
+            OnboardAction::Function(OnboardFunction::ScrollUp),
+            OnboardAction::Function(OnboardFunction::ScrollDown),
+        ],
+    ),
+    (
+        "actions.media",
+        &[
+            OnboardAction::Consumer(USAGE_PLAY_PAUSE),
+            OnboardAction::Consumer(USAGE_NEXT_TRACK),
+            OnboardAction::Consumer(USAGE_PREVIOUS_TRACK),
+            OnboardAction::Consumer(USAGE_VOLUME_UP),
+            OnboardAction::Consumer(USAGE_VOLUME_DOWN),
+            OnboardAction::Consumer(USAGE_MUTE),
+        ],
+    ),
+    (
+        "device.onboard_group_other",
+        &[
+            OnboardAction::Function(OnboardFunction::BatteryStatus),
+            OnboardAction::Disabled,
+        ],
+    ),
 ];
 
 /// Consumer-page (`0x0C`) usages from the USB HID Usage Tables.
@@ -218,7 +237,7 @@ pub(super) fn refusal_text(refusal: &OnboardButtonRefusal) -> SharedString {
 
 /// A key in the picker: its name, searchable, and its usage.
 #[derive(Clone)]
-struct KeyOption(HidKey);
+pub(super) struct KeyOption(pub(super) HidKey);
 
 impl SelectItem for KeyOption {
     type Value = HidKey;
@@ -235,7 +254,7 @@ impl SelectItem for KeyOption {
 /// The modifiers the dialog offers as toggles, left-hand only: the mouse
 /// replays them as the computer's own, and a right-hand modifier is still
 /// one pick away as a key of its own.
-const MODIFIER_TOGGLES: [(HidModifiers, &str); 4] = [
+pub(super) const MODIFIER_TOGGLES: [(HidModifiers, &str); 4] = [
     (HidModifiers::LEFT_CTRL, "Ctrl"),
     (HidModifiers::LEFT_SHIFT, "Shift"),
     (HidModifiers::LEFT_ALT, "Alt"),
@@ -243,7 +262,7 @@ const MODIFIER_TOGGLES: [(HidModifiers, &str); 4] = [
 ];
 
 /// The chord the dialog's picks make, or `None` until a key is chosen.
-fn picked_chord(modifiers: HidModifiers, key: Option<HidKey>) -> Option<HidKeyChord> {
+pub(super) fn picked_chord(modifiers: HidModifiers, key: Option<HidKey>) -> Option<HidKeyChord> {
     key.map(|key| HidKeyChord { modifiers, key })
 }
 
@@ -350,7 +369,7 @@ mod tests {
         HidKey, HidModifiers, OnboardAction, OnboardBinding, OnboardFunction,
     };
 
-    use super::{MENU_GROUPS, binding_label, picked_chord};
+    use super::{ACTION_GROUPS, binding_label, picked_chord};
     use crate::services::i18n::LOCALE_LOCK;
 
     #[test]
@@ -384,7 +403,7 @@ mod tests {
     #[test]
     fn the_menu_offers_each_action_once() {
         let mut seen = Vec::new();
-        for action in MENU_GROUPS.iter().flat_map(|group| group.iter()) {
+        for action in ACTION_GROUPS.iter().flat_map(|(_, group)| group.iter()) {
             assert!(!seen.contains(&action), "{action:?} offered twice");
             seen.push(action);
         }

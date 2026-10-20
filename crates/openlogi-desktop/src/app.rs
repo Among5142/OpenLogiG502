@@ -183,8 +183,8 @@ impl DetailTab {
 
     fn label(self) -> gpui::SharedString {
         match self {
-            Self::Buttons => tr!("device.buttons"),
-            Self::OnboardButtons => tr!("device.onboard_buttons"),
+            // A mouse has one of the two, so both read as its Buttons tab.
+            Self::Buttons | Self::OnboardButtons => tr!("device.buttons"),
             Self::ActionsRing => tr!("action_ring.actions_ring"),
             Self::Keys => tr!("device.keys"),
             Self::Pointer => tr!("device.pointer"),
@@ -283,7 +283,7 @@ impl AppView {
         }
 
         let mouse_model = cx.new(|cx| MouseModelView::new(window, cx));
-        let onboard_model = cx.new(OnboardModelView::new);
+        let onboard_model = cx.new(|cx| OnboardModelView::new(window, cx));
         let action_ring_panel = cx.new(ActionRingPanel::new);
         let keyboard_model = cx.new(FunctionRowView::new);
         let dpi_panel = cx.new(DpiPanel::new);
