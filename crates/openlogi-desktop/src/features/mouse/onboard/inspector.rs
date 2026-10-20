@@ -17,6 +17,7 @@ use super::actions::{
     ACTION_GROUPS, MODIFIER_TOGGLES, action_label, binding_icon, binding_label, picked_chord,
     refusal_text,
 };
+use super::macro_editor::{MacroDraft, macro_editor};
 use super::shape::OnboardTarget;
 use super::{OnboardDrawing, OnboardModelView, PickMode, PickerState, button_name};
 use crate::features::binding_editor::editor_section;
@@ -24,19 +25,25 @@ use crate::state::{AppState, DeviceKey};
 use crate::ui::components::{MenuRow, control_button, control_select};
 use crate::ui::theme::{ACCENT_BLUE, Palette, Typography as _};
 
+/// What the picker shows: its state, the macro draft, and the key the key
+/// search holds.
+pub(super) struct Picking<'a> {
+    pub(super) picker: &'a PickerState,
+    pub(super) draft: &'a MacroDraft,
+    pub(super) chosen_key: Option<HidKey>,
+}
+
 /// The inspector for `selected`, or the prompt to pick a button.
 pub(super) fn onboard_inspector(
     drawing: &OnboardDrawing,
     selected: Option<OnboardTarget>,
-    picker: &PickerState,
-    chosen_key: Option<HidKey>,
+    picking: &Picking<'_>,
     view: &Entity<OnboardModelView>,
     pal: Palette,
 ) -> gpui::Div {
     let body = match selected.and_then(|target| Some((target, drawing.button(target)?))) {
         Some((target, button)) => {
-            button_inspector(drawing, target, button, picker, chosen_key, view, pal)
-                .into_any_element()
+            button_inspector(drawing, target, button, picking, view, pal).into_any_element()
         }
         None => v_flex()
             .gap_3()
@@ -60,8 +67,7 @@ fn button_inspector(
     drawing: &OnboardDrawing,
     target: OnboardTarget,
     button: &OnboardButton,
-    picker: &PickerState,
-    chosen_key: Option<HidKey>,
+    picking: &Picking<'_>,
     view: &Entity<OnboardModelView>,
     pal: Palette,
 ) -> impl IntoElement {
@@ -91,8 +97,7 @@ fn button_inspector(
         .child(if button.locked() {
             locked_control(drawing, target, button, pal).into_any_element()
         } else {
-            picker_control(drawing, target, button, picker, chosen_key, view, pal)
-                .into_any_element()
+            picker_control(drawing, target, button, picking, view, pal).into_any_element()
         })
 }
 
@@ -134,18 +139,20 @@ fn current_action(binding: &OnboardBinding, pal: Palette) -> impl IntoElement {
         )
 }
 
-/// How to change an unlocked button: the kind of binding, then either the
-/// actions the mouse runs itself or a key to send.
+/// How to change an unlocked button: the kind of binding, then the actions
+/// the mouse runs itself, a key to send, or a macro.
 fn picker_control(
     drawing: &OnboardDrawing,
     target: OnboardTarget,
     button: &OnboardButton,
-    picker: &PickerState,
-    chosen_key: Option<HidKey>,
+    picking: &Picking<'_>,
     view: &Entity<OnboardModelView>,
     pal: Palette,
 ) -> impl IntoElement {
-    let mode_button = |id: &'static str, label: SharedString, mode: Option<PickMode>| {
+    let Picking {
+        picker, chosen_key, ..
+    } = *picking;
+    let mode_button = |id: &'static str, label: SharedString, mode: PickMode| {
         let view = view.clone();
         control_button(id)
             .debug_selector(move || id.to_string())
@@ -153,16 +160,12 @@ fn picker_control(
             .label(label)
             // `selected` alone barely tints a button; the accent shows the
             // pick at a glance.
-            .when(mode == Some(picker.mode), ButtonVariants::primary)
-            // Macros come next; the slot shows where they will be.
-            .disabled(mode.is_none())
-            .when_some(mode, |button, mode| {
-                button.on_click(move |_, _, cx| {
-                    view.update(cx, |view, cx| {
-                        view.set_pick_mode(mode);
-                        cx.notify();
-                    });
-                })
+            .when(mode == picker.mode, ButtonVariants::primary)
+            .on_click(move |_, _, cx| {
+                view.update(cx, |view, cx| {
+                    view.set_pick_mode(mode);
+                    cx.notify();
+                });
             })
     };
     let body = match picker.mode {
@@ -177,6 +180,9 @@ fn picker_control(
         PickMode::Key => {
             key_picker(drawing, target, picker, chosen_key, view, pal).into_any_element()
         }
+        PickMode::Macro => {
+            macro_editor(drawing, target, &button.binding, picking, view, pal).into_any_element()
+        }
     };
     v_flex()
         .gap_3()
@@ -186,17 +192,17 @@ fn picker_control(
                 .child(mode_button(
                     "onboard-mode-actions",
                     tr!("actions.actions"),
-                    Some(PickMode::Actions),
+                    PickMode::Actions,
                 ))
                 .child(mode_button(
                     "onboard-mode-key",
                     tr!("device.onboard_mode_key"),
-                    Some(PickMode::Key),
+                    PickMode::Key,
                 ))
                 .child(mode_button(
                     "onboard-mode-macro",
                     tr!("device.onboard_mode_macro"),
-                    None,
+                    PickMode::Macro,
                 )),
         )
         .child(body)

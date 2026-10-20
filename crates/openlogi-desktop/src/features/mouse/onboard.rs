@@ -10,6 +10,7 @@
 mod actions;
 mod inspector;
 pub(crate) mod list;
+mod macro_editor;
 pub(crate) mod shape;
 
 use std::rc::Rc;
@@ -33,7 +34,8 @@ use openlogi_core::hid::{
 };
 
 use self::actions::{KeyOption, binding_icon, binding_label, picked_chord};
-use self::inspector::onboard_inspector;
+use self::inspector::{Picking, onboard_inspector};
+use self::macro_editor::MacroDraft;
 use self::shape::{CapTone, OnboardTarget, Shape, ShapeColors, shape_for};
 use super::controls::{BindingLabel, ControlCard, HotspotDot, LABEL_W, OnHover, OnSelect};
 use super::geometry::{LABEL_H, labels_from_hotspots};
@@ -110,6 +112,7 @@ pub struct OnboardModelView {
     /// on what that button does now.
     picker_for: Option<OnboardTarget>,
     picker: PickerState,
+    macro_draft: MacroDraft,
     _state_obs: Subscription,
 }
 
@@ -120,6 +123,8 @@ enum PickMode {
     Actions,
     /// A keyboard key, with modifiers held around it.
     Key,
+    /// A macro the mouse stores and runs itself.
+    Macro,
 }
 
 /// The inspector's picker: which kind of binding it shows, and the key being
@@ -160,12 +165,13 @@ impl OnboardModelView {
                 modifiers: HidModifiers::NONE,
                 key_missing: false,
             },
+            macro_draft: MacroDraft::new(window, cx),
             _state_obs: state_obs,
         }
     }
 
-    /// Open the picker on what `target`'s button does now: its key, when it
-    /// sends one, otherwise the action list.
+    /// Open the picker on what `target`'s button does now: its key or its
+    /// macro, when it runs one, otherwise the action list.
     fn set_up_picker(
         &mut self,
         target: OnboardTarget,
@@ -179,10 +185,11 @@ impl OnboardModelView {
             OnboardBinding::Action(OnboardAction::Key(chord)) => Some(*chord),
             _ => None,
         };
-        self.picker.mode = if chord.is_some() {
-            PickMode::Key
-        } else {
-            PickMode::Actions
+        self.macro_draft.load(binding);
+        self.picker.mode = match binding {
+            OnboardBinding::Action(OnboardAction::Key(_)) => PickMode::Key,
+            OnboardBinding::Action(OnboardAction::Macro(_)) => PickMode::Macro,
+            _ => PickMode::Actions,
         };
         self.picker.modifiers = chord.map_or(HidModifiers::NONE, |chord| chord.modifiers);
         self.picker.keys.update(cx, |keys, cx| match chord {
@@ -227,6 +234,27 @@ impl OnboardModelView {
         let chord = picked_chord(self.picker.modifiers, key);
         self.picker.key_missing = chord.is_none();
         chord
+    }
+
+    /// The inspector for the selected button.
+    fn inspector(
+        &self,
+        drawing: &OnboardDrawing,
+        view: &Entity<Self>,
+        pal: Palette,
+        cx: &App,
+    ) -> gpui::Div {
+        onboard_inspector(
+            drawing,
+            self.selected,
+            &Picking {
+                picker: &self.picker,
+                draft: &self.macro_draft,
+                chosen_key: self.picker.keys.read(cx).selected_value().copied(),
+            },
+            view,
+            pal,
+        )
     }
 
     fn reset_for_device(&mut self, device: &DeviceKey) {
@@ -359,15 +387,7 @@ impl Render for OnboardModelView {
                     .children(dots),
             );
 
-        let chosen_key = self.picker.keys.read(cx).selected_value().copied();
-        let inspector = onboard_inspector(
-            &drawing,
-            self.selected,
-            &self.picker,
-            chosen_key,
-            &view,
-            pal,
-        );
+        let inspector = self.inspector(&drawing, &view, pal, cx);
         workspace_layout(
             canvas_area,
             Some(profile_bar(&drawing, pal)),
