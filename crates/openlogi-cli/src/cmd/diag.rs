@@ -19,6 +19,7 @@ pub mod lighting;
 pub mod pointer_speed;
 pub mod profiles;
 pub mod remap;
+pub mod sector;
 pub mod smartshift;
 pub mod wheel;
 
@@ -47,6 +48,9 @@ pub enum DiagCmd {
     Remap(remap::RemapArgs),
     /// Write a `diag remap` backup back over the active onboard profile.
     Restore(remap::RestoreArgs),
+    /// Dump raw sectors of a G-series mouse's 0x8100 onboard profile store
+    /// (read-only).
+    Sector(sector::SectorArgs),
 }
 
 impl DiagCmd {
@@ -66,6 +70,7 @@ impl DiagCmd {
             Self::Profiles(args) => profiles::run(args).await,
             Self::Remap(args) => remap::run_remap(args).await,
             Self::Restore(args) => remap::run_restore(args).await,
+            Self::Sector(args) => sector::run(args).await,
         }
     }
 }

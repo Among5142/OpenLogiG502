@@ -304,6 +304,11 @@ pub async fn restore_onboard_profile(
     device::restore_onboard_profile(&*native_backend(), route, backup).await
 }
 
+/// Read one raw `0x8100` onboard-profile sector of the device `route` reaches.
+pub async fn read_onboard_sector(route: &DeviceRoute, sector: u16) -> Result<Vec<u8>, WriteError> {
+    device::read_onboard_sector(&*native_backend(), route, sector).await
+}
+
 /// Read the raw battery report of the device `route` reaches.
 pub async fn read_battery_raw(route: &DeviceRoute) -> Result<String, WriteError> {
     device::read_battery_raw(&*native_backend(), route).await

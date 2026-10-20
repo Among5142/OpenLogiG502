@@ -274,6 +274,31 @@ pub async fn dump_onboard_profiles(
     .await
 }
 
+/// Read one raw sector of the `0x8100` onboard profile store of the device
+/// on `route`, whole, for `openlogi diag sector`. Read-only: it lets macro
+/// and other sectors this build does not decode be inspected.
+pub async fn read_onboard_sector(
+    backend: &dyn HidBackend,
+    route: &DeviceRoute,
+    sector: u16,
+) -> Result<Vec<u8>, WriteError> {
+    const FEATURE: u16 = <OnboardProfilesFeature as CreatableFeature>::ID;
+    let index = route.device_index();
+    with_route(backend, route, move |channel| async move {
+        let mut device = Device::new(Arc::clone(&channel), index)
+            .await
+            .map_err(|_| WriteError::DeviceUnreachable { index })?;
+        let feature = open_feature::<OnboardProfilesFeature>(&mut device).await?;
+        let fail = |e| classify_hidpp_error(e, HidppOperation::DumpFeatures, FEATURE);
+        let info = feature.get_info().await.map_err(fail)?;
+        feature
+            .read_sector(sector, info.sector_size)
+            .await
+            .map_err(fail)
+    })
+    .await
+}
+
 /// Diagnostic read of the device's raw battery report — the unified `0x1004`
 /// fields, the legacy `0x1000` `discharge_level`/`next_level`/`status`, or the
 /// `0x1F20` ADC voltage and charging state. For
