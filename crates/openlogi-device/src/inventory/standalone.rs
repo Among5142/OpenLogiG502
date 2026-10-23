@@ -87,13 +87,17 @@ fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevi
     None
 }
 
-/// Reject multiple nodes that the route cannot distinguish safely.
+/// Reject multiple nodes that the route cannot distinguish safely: two
+/// answering to the same VID/PID/usage tuple *and* the same identity.
 ///
-/// A serial-bearing pair is distinguishable even when two identical lights
-/// share the same VID/PID/usage tuple. An OS-node identity (`id:…`) is only a
-/// transient re-find hint, so two such nodes with the same tuple are
-/// indistinguishable and must not be exposed as independently selectable
-/// devices.
+/// Identical lights are told apart by serial number when they report one.
+/// When they do not (some Litra Glows), each is still a distinct OS node, so
+/// its `id:…` identity names it for as long as it stays plugged in where it
+/// is; on Windows that path follows the USB port, so it survives a replug
+/// into the same port. Such a light's settings stay session-only either way
+/// (`PhysicalDeviceKey::is_transient`), so an identity that does move after
+/// a replug leaves nothing saved against the wrong light. Only nodes the
+/// route would match together are ambiguous.
 fn validate_no_ambiguous_nodes(devices: &[StandaloneDevice]) -> Result<(), InventoryError> {
     let mut groups: HashMap<(u16, u16, u16, u16), Vec<&StandaloneDevice>> = HashMap::new();
     for device in devices {
@@ -109,17 +113,11 @@ fn validate_no_ambiguous_nodes(devices: &[StandaloneDevice]) -> Result<(), Inven
             .push(device);
     }
     if groups.values().any(|group| {
-        if group.len() < 2 {
-            return false;
-        }
         let identities: HashSet<&str> = group
             .iter()
             .map(|device| device.address.identity.as_str())
             .collect();
         identities.len() != group.len()
-            || group
-                .iter()
-                .any(|device| !device.address.identity.starts_with("serial:"))
     }) {
         return Err(InventoryError::AmbiguousRawDevice);
     }
@@ -162,12 +160,24 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_transient_nodes_are_rejected() {
-        let devices = vec![raw("id:old"), raw("id:new")];
-        assert!(matches!(
-            validate_no_ambiguous_nodes(&devices),
-            Err(InventoryError::AmbiguousRawDevice)
-        ));
+    fn two_lights_without_serials_are_told_apart_by_their_nodes() {
+        let devices = vec![raw("id:port-1"), raw("id:port-2")];
+        let validation = validate_no_ambiguous_nodes(&devices);
+        assert!(
+            validation.is_ok(),
+            "distinct OS nodes stay distinguishable: {validation:?}"
+        );
+    }
+
+    #[test]
+    fn nodes_the_route_cannot_tell_apart_are_rejected() {
+        for identity in ["id:same", "serial:same"] {
+            let devices = vec![raw(identity), raw(identity)];
+            assert!(matches!(
+                validate_no_ambiguous_nodes(&devices),
+                Err(InventoryError::AmbiguousRawDevice)
+            ));
+        }
     }
 
     #[test]
